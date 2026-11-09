@@ -1,5 +1,5 @@
 // オフライン用キャッシュ。ファイルを変えたら VERSION を上げる
-const VERSION = 'ayu-nikki-v1.0.0';
+const VERSION = 'ayu-nikki-v1.1.0';
 const FILES = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/app.js', './js/db.js', './js/model.js', './js/search.js', './js/stats.js',

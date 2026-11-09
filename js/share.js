@@ -1,5 +1,5 @@
 // カードを画像（PNG）にしてLINEなどへ共有する
-import { formatDate, formatLevel, tripCost, yen, has, TACKLE_FIELDS } from './model.js';
+import { formatDate, formatLevel, has, TACKLE_FIELDS, formatMoves, THEME_COLOR } from './model.js';
 
 const W = 1080, PAD = 56;
 const C = { bg: '#f4f7f5', card: '#ffffff', main: '#0f5f57', sub: '#5b6b66', text: '#1d2a27', accent: '#e3b400', line: '#dfe7e4' };
@@ -22,7 +22,7 @@ function loadImage(src) {
 }
 
 // 描画を2回行う：1回目で高さを測り、2回目で実際に描く
-function draw(ctx, t, photo, measureOnly) {
+function draw(ctx, t, photo, measureOnly, color) {
   let y = 0;
   const text = (s, x, size, color = C.text, weight = 400, align = 'left') => {
     ctx.font = `${weight} ${size}px ${FONT}`; ctx.fillStyle = color; ctx.textAlign = align;
@@ -31,7 +31,7 @@ function draw(ctx, t, photo, measureOnly) {
   const section = (title) => {
     y += 34;
     if (!measureOnly) { ctx.fillStyle = C.line; ctx.fillRect(PAD, y, W - PAD * 2, 2); }
-    y += 52; text(title, PAD, 30, C.main, 700); y += 14;
+    y += 52; text(title, PAD, 30, color, 700); y += 14;
   };
   const row = (label, value) => {
     if (!value) return;
@@ -41,22 +41,25 @@ function draw(ctx, t, photo, measureOnly) {
     lines.forEach((l, i) => { if (i) y += 44; text(l, PAD + 230, 32); });
   };
 
-  // ヘッダー帯
-  if (!measureOnly) { ctx.fillStyle = C.main; ctx.fillRect(0, 0, W, 250); }
+  // ヘッダー帯（河川の色）
+  const moves = formatMoves(t);
+  const headH = 250 + moves.length * 46 + (t.title ? 60 : 0);
+  if (!measureOnly) { ctx.fillStyle = color; ctx.fillRect(0, 0, W, headH); }
   y = 86; text(formatDate(t.date), PAD, 44, '#fff', 700);
-  text('鮎日記', W - PAD, 34, '#cfe9e3', 700, 'right');
   y += 74; text(t.river || '河川未入力', PAD, 58, '#fff', 800);
   ctx.font = `400 34px ${FONT}`;
   const pt = t.point ? wrap(ctx, t.point, W - PAD * 2)[0] : '';
-  y += 56; text(pt, PAD, 34, '#e3f3ef');
-  y = 250;
+  y += 56; text(pt, PAD, 34, '#eef7f4');
+  for (const mv of moves) { y += 46; text(`→ ${mv}`, PAD, 30, '#eef7f4'); }
+  if (t.title) { y += 60; text(`「${t.title}」`, PAD, 36, '#fff', 700); }
+  y = headH;
 
   // 釣果
   y += 110;
-  text(has(t.count) ? `${t.count}` : '-', PAD, 110, C.main, 800);
+  text(has(t.count) ? `${t.count}` : '-', PAD, 110, color, 800);
   ctx.font = `800 110px ${FONT}`;
   const cw = ctx.measureText(has(t.count) ? `${t.count}` : '-').width;
-  text('匹', PAD + cw + 10, 44, C.main, 700);
+  text('匹', PAD + cw + 10, 44, color, 700);
   text(has(t.maxSize) ? `最大 ${t.maxSize}cm` : '', W - PAD, 48, C.text, 700, 'right');
   y += 54;
   const sub = [has(t.bare) ? `バラシ ${t.bare}` : '', t.sizeFeel].filter(Boolean).join('　');
@@ -64,7 +67,8 @@ function draw(ctx, t, photo, measureOnly) {
   if (!measureOnly) { ctx.fillStyle = C.accent; ctx.fillRect(PAD, y + 10, 120, 8); }
   y += 10;
   row('時合', (t.jiai || []).join('・'));
-  row('釣れた場所', (t.spots || []).join('・'));
+  row('釣れた場所', [(t.spots || []).join('・'), t.spotsNote].filter(Boolean).join('　'));
+  row('釣り方', (t.methods || []).join('・'));
   row('時間', [t.startTime, t.endTime].some(Boolean) ? `${t.startTime || '?'}〜${t.endTime || '?'}` : '');
 
   section('状況');
@@ -74,13 +78,6 @@ function draw(ctx, t, photo, measureOnly) {
 
   const tk = TACKLE_FIELDS.filter(([k]) => t.tackle?.[k]);
   if (tk.length) { section('仕掛け'); tk.forEach(([k, label]) => row(label, t.tackle[k])); }
-
-  const cost = tripCost(t);
-  if (cost || t.otori?.shop) {
-    section('オトリ・費用');
-    row('オトリ', [t.otori?.shop, has(t.otori?.count) ? `${t.otori.count}匹` : ''].filter(Boolean).join('　'));
-    row('費用合計', cost ? yen(cost) : '');
-  }
 
   if (t.memo) {
     section('メモ');
@@ -101,28 +98,29 @@ function draw(ctx, t, photo, measureOnly) {
   return y + PAD;
 }
 
-export async function renderCardImage(t) {
+export async function renderCardImage(t, color = THEME_COLOR) {
   const photo = t.photos?.[0] ? await loadImage(t.photos[0].data) : null;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   canvas.width = W;
-  const h = draw(ctx, t, photo, true);
+  const h = draw(ctx, t, photo, true, color);
   canvas.height = h;
   ctx.fillStyle = C.card; ctx.fillRect(0, 0, W, h);
-  draw(ctx, t, photo, false);
+  draw(ctx, t, photo, false, color);
   return new Promise((res) => canvas.toBlob(res, 'image/png'));
 }
 
 export function shareText(t) {
   const L = [`【鮎日記】${formatDate(t.date)}`, `${t.river}${t.point ? ' ' + t.point : ''}`];
+  if (t.title) L.push(`「${t.title}」`);
   L.push(`釣果 ${has(t.count) ? t.count : '-'}匹${has(t.maxSize) ? ` / 最大${t.maxSize}cm` : ''}${has(t.bare) ? ` / バラシ${t.bare}` : ''}`);
   const lv = formatLevel(t);
   if (lv) L.push(`水位 ${lv}`);
   return L.join('\n');
 }
 
-export async function shareTrip(t) {
-  const blob = await renderCardImage(t);
+export async function shareTrip(t, color) {
+  const blob = await renderCardImage(t, color);
   const file = new File([blob], `鮎日記_${t.date}_${t.river || ''}.png`, { type: 'image/png' });
   if (navigator.canShare?.({ files: [file] })) {
     try {

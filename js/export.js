@@ -1,5 +1,5 @@
 // シーズンまとめ Excel の中身を組み立てる
-import { TACKLE_FIELDS, weekday, formatLevel, tripCost, has, sortTrips } from './model.js';
+import { TACKLE_FIELDS, weekday, has, sortTrips, formatMoves } from './model.js';
 import { summarize } from './stats.js';
 import { buildXlsx } from './xlsx.js';
 
@@ -10,6 +10,8 @@ const LIST_COLUMNS = [
   ['曜日', 5, (t) => weekday(t.date)],
   ['河川', 9, (t) => t.river],
   ['ポイント', 18, (t) => t.point],
+  ['移動先', 24, (t) => formatMoves(t).join(' → ')],
+  ['ひとこと', 24, (t) => t.title],
   ['開始', 7, (t) => t.startTime],
   ['終了', 7, (t) => t.endTime],
   ['天気', 7, (t) => t.weather],
@@ -26,14 +28,9 @@ const LIST_COLUMNS = [
   ['サイズ感', 10, (t) => t.sizeFeel],
   ['時合', 16, (t) => (t.jiai || []).join('、')],
   ['釣れた場所', 16, (t) => (t.spots || []).join('、')],
+  ['場所メモ', 16, (t) => t.spotsNote],
+  ['釣り方', 18, (t) => (t.methods || []).join('、')],
   ...TACKLE_FIELDS.map(([k, label]) => [label, 14, (t) => t.tackle?.[k]]),
-  ['オトリ店', 12, (t) => t.otori?.shop],
-  ['オトリ数', 8, (t) => n(t.otori?.count)],
-  ['オトリ代', 9, (t) => n(t.otori?.cost)],
-  ['遊漁券', 7, (t) => t.ticket?.type],
-  ['遊漁券代', 9, (t) => n(t.ticket?.cost)],
-  ['その他費用', 10, (t) => n(t.otherCost)],
-  ['費用合計', 9, (t) => tripCost(t)],
   ['メモ', 40, (t) => t.memo],
 ];
 
@@ -54,8 +51,6 @@ export function seasonSheets(trips, season) {
     ['最大サイズ', s.maxSize, s.maxTrip ? `cm（${s.maxTrip.date} ${s.maxTrip.river}）` : 'cm'],
     ['最多釣果', s.bestTrip ? Number(s.bestTrip.count) : null, s.bestTrip ? `匹（${s.bestTrip.date} ${s.bestTrip.river}）` : '匹'],
     ['総バラシ数', s.totalBare, '匹'],
-    ['費用合計', s.totalCost, '円'],
-    ['1匹あたり費用', s.costPerFish, '円'],
   ];
   for (const [k, v, u] of kv) sum.push([{ v: k, s: 'bold' }, v, u]);
 

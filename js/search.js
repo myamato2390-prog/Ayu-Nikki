@@ -10,7 +10,8 @@ export function isEmptyQuery(q) {
 
 function haystack(t) {
   return [
-    t.river, t.point, t.station, t.memo, t.otori?.shop, t.weather, t.sizeFeel,
+    t.river, t.point, t.station, t.memo, t.title, t.spotsNote, t.otori?.shop, t.weather, t.sizeFeel,
+    ...(t.moves || []).flatMap((m) => [m.river, m.point]), ...(t.methods || []),
     ...TACKLE_FIELDS.map(([k]) => t.tackle?.[k]),
     ...(t.spots || []), ...(t.jiai || []),
   ].filter(Boolean).join('\n').toLowerCase();
@@ -18,7 +19,8 @@ function haystack(t) {
 
 export function matchTrip(t, q) {
   if (isEmptyQuery(q)) return true;
-  if (q.river && t.river !== q.river) return false;
+  // 途中で移動した河川も対象にする
+  if (q.river && t.river !== q.river && !(t.moves || []).some((m) => m.river === q.river)) return false;
   if (q.season && String(seasonOf(t)) !== String(q.season)) return false;
   if (q.from && (t.date || '') < q.from) return false;
   if (q.to && (t.date || '') > q.to) return false;

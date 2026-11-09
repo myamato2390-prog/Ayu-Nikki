@@ -1,14 +1,16 @@
 import * as db from './db.js';
 import {
-  DEFAULT_RIVER_SETTINGS, WEATHER, LEVEL_WORDS, CLARITY, AKA, SIZE_FEEL, JIAI, SPOTS, TICKET_TYPES, TACKLE_FIELDS,
-  newTrip, normalizeTrip, sortTrips, formatDate, formatLevel, tripCost, tackleSummary, yen, has, num, uid, todayISO, seasonOf,
+  DEFAULT_RIVER_SETTINGS, THEME_COLOR, defaultRiverColor,
+  WEATHER, LEVEL_WORDS, CLARITY, AKA, SIZE_FEEL, JIAI, SPOTS, METHODS, TACKLE_FIELDS,
+  newTrip, normalizeTrip, sortTrips, formatDate, formatLevel, formatMoves, normalizeTime, tackleSummary,
+  has, num, uid, todayISO, seasonOf,
 } from './model.js';
 import { emptyQuery, isEmptyQuery, filterTrips, describeQuery } from './search.js';
 import { summarize, seasons } from './stats.js';
 import { seasonXlsx } from './export.js';
 import { shareTrip, downloadBlob } from './share.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 
 const state = {
   trips: [],
@@ -25,6 +27,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const uniq = (arr) => [...new Set(arr.filter(Boolean))];
+const nowHM = () => new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 
 function toast(msg) {
   const el = $('#toast');
@@ -51,17 +54,27 @@ function readValue(el) {
 function riverSetting(name) {
   return state.rivers.find((r) => r.name === name);
 }
+function riverColor(name) {
+  return riverSetting(name)?.color || (name ? defaultRiverColor(name) : THEME_COLOR);
+}
 function riverNames() {
   return uniq([...state.rivers.map((r) => r.name), ...state.trips.map((t) => t.river)]);
+}
+
+function setTheme(color = THEME_COLOR) {
+  $('#top').style.background = color;
+  $('meta[name="theme-color"]')?.setAttribute('content', color);
 }
 
 // ---------- 画面の枠 ----------
 function mount(topHtml) {
   $('#top').innerHTML = topHtml;
+  setTheme();
   const root = document.createElement('div');
   root.className = 'view';
   $('#view').replaceChildren(root);
   $('#view').scrollTop = 0;
+  $('#view').classList.remove('no-scroll');
   return root;
 }
 
@@ -80,6 +93,10 @@ function input(obj, path, attrs = '') {
 function numInput(obj, path, attrs = '') {
   return input(obj, path, `type="number" inputmode="decimal" ${attrs}`);
 }
+// 時刻は数字だけで入力（0730 → 07:30）。Androidの時刻ピッカーは使わない
+function timeInput(obj, path) {
+  return input(obj, path, 'data-time inputmode="numeric" maxlength="5" placeholder="例: 0730"');
+}
 function chips(obj, path, options, multi = false) {
   const v = getPath(obj, path);
   const on = (o) => (multi ? (v || []).includes(o) : v === o);
@@ -97,7 +114,7 @@ function stepper(obj, path, unit) {
 }
 const datalist = (id, values) => `<datalist id="${id}">${uniq(values).map((v) => `<option value="${esc(v)}">`).join('')}</datalist>`;
 
-// チップ・ステッパーの共通処理。変更があれば onChange(path) を呼ぶ
+// チップ・ステッパー・入力欄の共通処理。変更があれば onChange(path) を呼ぶ
 function bindControls(root, obj, onChange) {
   root.addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
@@ -109,7 +126,6 @@ function bindControls(root, obj, onChange) {
         const arr = [...(getPath(obj, path) || [])];
         const i = arr.indexOf(val);
         if (i >= 0) arr.splice(i, 1); else arr.push(val);
-        // 選択肢の並び順を保つ
         const order = $$('.chip', box).map((c) => c.dataset.chip);
         arr.sort((a, b) => order.indexOf(a) - order.indexOf(b));
         setPath(obj, path, arr);
@@ -138,6 +154,24 @@ function bindControls(root, obj, onChange) {
     setPath(obj, el.dataset.path, readValue(el));
     onChange(el.dataset.path);
   });
+  // 時刻欄は入力を終えたときに 07:30 の形に整える
+  root.addEventListener('change', (e) => {
+    const el = e.target.closest('input[data-time]');
+    if (!el) return;
+    const v = normalizeTime(el.value);
+    if (v === null) { toast('時刻は 0730 のように4桁で入力してください'); return; }
+    el.value = v;
+    if (el.dataset.path) { setPath(obj, el.dataset.path, v); onChange(el.dataset.path); }
+  });
+}
+
+// ---------- 写真の拡大表示 ----------
+function showPhoto(src) {
+  const ov = document.createElement('div');
+  ov.className = 'photo-overlay';
+  ov.innerHTML = `<img src="${src}" alt="写真"><button type="button" aria-label="閉じる">×</button>`;
+  ov.addEventListener('click', () => ov.remove());
+  document.body.appendChild(ov);
 }
 
 // ---------- カード表示 ----------
@@ -145,60 +179,49 @@ function visibleTrips() {
   return sortTrips(filterTrips(state.trips, state.query));
 }
 
-function dl(rows) {
-  const r = rows.filter(([, v]) => v);
-  if (!r.length) return '';
-  return `<dl class="kv">${r.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
-}
+// 小さなラベル付きのマス目
+const cell = (label, value, wide = false) => (value ? `<div class="cell${wide ? ' wide' : ''}"><span>${label}</span>${value}</div>` : '');
+const tags = (arr, cls = '') => (arr || []).map((v) => `<span class="pill ${cls}">${esc(v)}</span>`).join('');
 
 function cardHtml(t) {
+  const color = riverColor(t.river);
   const rs = riverSetting(t.river);
-  const levelText = esc(formatLevel(t));
-  const levelLink = rs?.url ? ` <a class="mini-link" href="${esc(rs.url)}" target="_blank" rel="noopener">水位ページ</a>` : '';
-  const afterMissing = !has(t.count);
-  const cost = tripCost(t);
-  const tk = TACKLE_FIELDS.filter(([k]) => t.tackle?.[k]).map(([k, label]) => [label, esc(t.tackle[k])]);
+  const moves = formatMoves(t);
+  const photo = t.photos?.[0]?.data;
+  const time = t.startTime || t.endTime ? `${esc(t.startTime || '?')}〜${esc(t.endTime || '?')}` : '';
+  const weather = [t.weather, has(t.airTemp) ? `${t.airTemp}℃` : ''].filter(Boolean).join(' ');
+  const level = formatLevel(t);
+  const tk = TACKLE_FIELDS.filter(([k]) => t.tackle?.[k]);
 
-  return `<article class="card" data-id="${t.id}">
-    <header class="card-head">
-      <div class="card-date">${formatDate(t.date)}</div>
-      <div class="card-river">${esc(t.river || '河川未入力')}</div>
-      ${t.point ? `<div class="card-point">${esc(t.point)}</div>` : ''}
+  return `<article class="card" data-id="${t.id}" style="--river:${esc(color)}">
+    <header class="card-head${photo ? ' has-photo' : ''}" ${photo ? `data-bg="${photo}"` : ''}>
+      <div class="card-date">${formatDate(t.date)}${time ? `<span>${time}</span>` : ''}</div>
+      <div class="card-place"><b>${esc(t.river || '河川未入力')}</b>${t.point ? ` ${esc(t.point)}` : ''}</div>
+      ${moves.map((m) => `<div class="card-move">→ ${esc(m)}</div>`).join('')}
+      ${t.title ? `<div class="card-title">「${esc(t.title)}」</div>` : ''}
     </header>
-    ${afterMissing ? `<a class="after-banner" href="#/edit/${t.id}?tab=after">釣行後の記録がまだです　入力する ›</a>` : ''}
+    ${!has(t.count) ? `<a class="after-banner" href="#/edit/${t.id}?tab=after">釣行後の記録がまだです　入力する ›</a>` : ''}
     <section class="catch">
-      <div class="catch-count"><b>${has(t.count) ? esc(t.count) : '-'}</b><span>匹</span></div>
-      <div class="catch-side">
-        <div>最大 <b>${has(t.maxSize) ? esc(t.maxSize) : '-'}</b> cm</div>
-        <div>バラシ ${has(t.bare) ? esc(t.bare) : '-'}</div>
-        ${t.sizeFeel ? `<div class="tag">${esc(t.sizeFeel)}</div>` : ''}
-      </div>
+      <div class="catch-count"><b>${has(t.count) ? esc(t.count) : '-'}</b>匹</div>
+      <div class="catch-stat"><span>最大</span><b>${has(t.maxSize) ? esc(t.maxSize) : '-'}</b>cm</div>
+      <div class="catch-stat"><span>バラシ</span><b>${has(t.bare) ? esc(t.bare) : '-'}</b></div>
+      ${t.sizeFeel ? `<div class="catch-feel">${esc(t.sizeFeel)}</div>` : ''}
     </section>
-    ${dl([
-      ['時合', esc((t.jiai || []).join('・'))],
-      ['釣れた場所', esc((t.spots || []).join('・'))],
-      ['時間', t.startTime || t.endTime ? `${esc(t.startTime || '?')}〜${esc(t.endTime || '?')}` : ''],
-    ])}
-    <h3>状況</h3>
-    ${dl([
-      ['天気', esc([t.weather, has(t.airTemp) ? `気温 ${t.airTemp}℃` : '', has(t.waterTemp) ? `水温 ${t.waterTemp}℃` : ''].filter(Boolean).join('　'))],
-      ['水位', levelText ? levelText + levelLink : ''],
-      ['濁り', esc(t.clarity)],
-      ['垢', esc(t.aka)],
-    ]) || '<p class="muted">未入力</p>'}
-    ${tk.length ? `<h3>仕掛け</h3>${dl(tk)}` : ''}
-    ${cost || t.otori?.shop ? `<h3>オトリ・費用</h3>${dl([
-      ['オトリ', esc([t.otori?.shop, has(t.otori?.count) ? `${t.otori.count}匹` : '', has(t.otori?.cost) ? yen(t.otori.cost) : ''].filter(Boolean).join('　'))],
-      ['遊漁券', esc([t.ticket?.type, has(t.ticket?.cost) ? yen(t.ticket.cost) : ''].filter(Boolean).join('　'))],
-      ['その他', has(t.otherCost) ? yen(t.otherCost) : ''],
-      ['合計', cost ? `<b>${yen(cost)}</b>` : ''],
-    ])}` : ''}
-    ${t.memo ? `<h3>メモ</h3><p class="memo">${esc(t.memo)}</p>` : ''}
-    ${t.photos?.length ? `<div class="photos">${t.photos.map((p) => `<img data-src="${p.data}" alt="釣行の写真">`).join('')}</div>` : ''}
-    <div class="card-actions">
-      <a class="btn" href="#/edit/${t.id}">編集</a>
-      <button type="button" class="btn line" data-act="share">LINEで送る</button>
-    </div>
+    ${(t.jiai?.length || t.spots?.length || t.methods?.length || t.spotsNote) ? `<section class="pills">
+      ${t.jiai?.length ? `<div><em>時合</em>${tags(t.jiai)}</div>` : ''}
+      ${t.spots?.length || t.spotsNote ? `<div><em>場所</em>${tags(t.spots)}${t.spotsNote ? `<span class="pill plain">${esc(t.spotsNote)}</span>` : ''}</div>` : ''}
+      ${t.methods?.length ? `<div><em>釣り方</em>${tags(t.methods, 'method')}</div>` : ''}
+    </section>` : ''}
+    <section class="grid">
+      ${cell('天気', esc(weather))}
+      ${cell('水温', has(t.waterTemp) ? `${esc(t.waterTemp)}℃` : '')}
+      ${cell('濁り', esc(t.clarity))}
+      ${cell('垢', esc(t.aka))}
+      ${cell('水位', level ? esc(level) + (rs?.url ? ` <a href="${esc(rs.url)}" target="_blank" rel="noopener" class="mini-link">↗</a>` : '') : '', true)}
+    </section>
+    ${tk.length ? `<section class="grid tackle">${tk.map(([k, label]) => cell(label, esc(t.tackle[k]))).join('')}</section>` : ''}
+    ${t.memo ? `<section class="memo" data-act="memo">${esc(t.memo)}</section>` : ''}
+    ${t.photos?.length > 1 || (t.photos?.length === 1) ? `<section class="strip">${t.photos.map((p) => `<img data-src="${p.data}" alt="写真" data-act="photo">`).join('')}</section>` : ''}
   </article>`;
 }
 
@@ -211,8 +234,11 @@ function viewCards() {
 
   const root = mount(`
     <button class="icon-btn" data-nav="-1" aria-label="前の釣行">‹</button>
-    <div class="top-title"><div>鮎日記</div><div class="pos" id="pos"></div></div>
-    <button class="icon-btn" data-nav="1" aria-label="次の釣行">›</button>`);
+    <div class="top-title"><div class="pos-big" id="pos"></div></div>
+    <button class="icon-btn" data-nav="1" aria-label="次の釣行">›</button>
+    <button class="icon-btn small" id="share-btn" aria-label="LINEなどで送る" title="LINEなどで送る">⤴</button>
+    <button class="icon-btn small" id="edit-btn" aria-label="編集" title="編集">✎</button>`);
+  $('#view').classList.add('no-scroll');
 
   if (searching) {
     root.insertAdjacentHTML('beforeend', `<div class="search-banner">
@@ -221,54 +247,77 @@ function viewCards() {
   }
 
   if (!list.length) {
+    $('#view').classList.remove('no-scroll');
     root.insertAdjacentHTML('beforeend', searching
       ? `<div class="empty"><p>条件に合う釣行がありません。</p><a class="btn" href="#/search">条件を変える</a></div>`
       : `<div class="empty"><div class="empty-fish">🐟</div><p>まだ釣行の記録がありません。</p><p class="muted">川に入る前に「釣行前」を、上がったら「釣行後」を入力します。</p><a class="btn primary" href="#/new">最初の釣行を記録する</a></div>`);
-    $('#pos').textContent = '';
-  } else {
-    root.insertAdjacentHTML('beforeend', `<div class="deck${searching ? ' with-banner' : ''}" id="deck">${list.map(cardHtml).join('')}</div>`);
+    $$('#top .icon-btn').forEach((b) => (b.disabled = true));
+    return;
   }
+  root.insertAdjacentHTML('beforeend', `<div class="deck${searching ? ' with-banner' : ''}" id="deck">${list.map(cardHtml).join('')}</div>`);
 
-  root.addEventListener('click', async (e) => {
-    const act = e.target.closest('[data-act]')?.dataset.act;
-    if (act === 'clear-search') {
-      state.query = emptyQuery();
-      viewCards();
-    } else if (act === 'share') {
-      const id = e.target.closest('.card').dataset.id;
-      const t = state.trips.find((x) => x.id === id);
-      toast('画像を作成中…');
-      const r = await shareTrip(t);
-      if (r === 'downloaded') toast('画像を保存しました。LINEから送ってください');
-    }
+  const current = () => state.trips.find((x) => x.id === state.currentId);
+  root.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]');
+    const act = el?.dataset.act;
+    if (act === 'clear-search') { state.query = emptyQuery(); viewCards(); }
+    else if (act === 'memo') el.classList.toggle('open');
+    else if (act === 'photo' && el.src) showPhoto(el.src);
   });
+  $('#edit-btn').onclick = () => { if (state.currentId) location.hash = `#/edit/${state.currentId}`; };
+  $('#share-btn').onclick = async () => {
+    const t = current();
+    if (!t) return;
+    toast('画像を作成中…');
+    const r = await shareTrip(t, riverColor(t.river));
+    if (r === 'downloaded') toast('画像を保存しました。LINEから送ってください');
+  };
 
   const deck = $('#deck');
   const update = () => {
-    if (!deck) return;
+    if (!deck.isConnected) return; // 別の画面へ移った後は何もしない
     const i = Math.max(0, Math.min(list.length - 1, Math.round(deck.scrollLeft / deck.clientWidth)));
-    state.currentId = list[i]?.id;
+    const t = list[i];
+    state.currentId = t?.id;
     $('#pos').textContent = `${i + 1} / ${list.length}`;
+    setTheme(riverColor(t?.river));
     $$('[data-nav]').forEach((b) => (b.disabled = (b.dataset.nav === '-1' && i === 0) || (b.dataset.nav === '1' && i === list.length - 1)));
     // 写真は表示中の前後だけ読み込む
     [...deck.children].forEach((card, j) => {
-      if (Math.abs(j - i) <= 1) $$('img[data-src]', card).forEach((img) => { img.src = img.dataset.src; img.removeAttribute('data-src'); });
+      if (Math.abs(j - i) > 1) return;
+      $$('img[data-src]', card).forEach((img) => { img.src = img.dataset.src; img.removeAttribute('data-src'); });
+      const head = $('.card-head[data-bg]', card);
+      if (head) { head.style.backgroundImage = `linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.55)),url("${head.dataset.bg}")`; head.removeAttribute('data-bg'); }
     });
   };
   $$('[data-nav]').forEach((b) => {
-    b.disabled = !deck;
-    b.onclick = () => deck?.scrollBy({ left: Number(b.dataset.nav) * deck.clientWidth, behavior: 'smooth' });
+    b.onclick = () => deck.scrollBy({ left: Number(b.dataset.nav) * deck.clientWidth, behavior: 'smooth' });
   });
-  if (deck) {
-    let raf;
-    deck.addEventListener('scroll', () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(update); }, { passive: true });
-    requestAnimationFrame(() => {
-      deck.style.scrollBehavior = 'auto';
-      deck.scrollLeft = idx * deck.clientWidth;
-      deck.style.scrollBehavior = '';
-      update();
-    });
-  }
+  let raf;
+  deck.addEventListener('scroll', () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(update); }, { passive: true });
+  requestAnimationFrame(() => {
+    deck.style.scrollBehavior = 'auto';
+    deck.scrollLeft = idx * deck.clientWidth;
+    deck.style.scrollBehavior = '';
+    update();
+  });
+}
+
+// ---------- ＋記録：釣行後が未入力の記録があれば続きを選べる ----------
+function viewNew(fresh) {
+  const pending = sortTrips(state.trips.filter((t) => !has(t.count))).reverse().slice(0, 3);
+  if (fresh || !pending.length) return viewEdit(null, 'before');
+  setActiveTab('new');
+  const root = mount(`<div class="top-title"><div>記録</div></div>`);
+  root.innerHTML = `
+    <p class="lead">釣行後の記録がまだの釣行があります。</p>
+    ${pending.map((t) => `
+      <a class="choice" href="#/edit/${t.id}?tab=after" style="--river:${esc(riverColor(t.river))}">
+        <span class="choice-date">${formatDate(t.date)}</span>
+        <b>${esc(t.river || '河川未入力')} ${esc(t.point)}</b>
+        <span class="choice-go">釣行後を入力する ›</span>
+      </a>`).join('')}
+    <a class="btn wide" href="#/new?fresh=1">＋ 新しい釣行を記録する</a>`;
 }
 
 // ---------- 入力・編集 ----------
@@ -291,6 +340,8 @@ function latestOtherTrip(id) {
   return sortTrips(state.trips.filter((t) => t.id !== id && Object.values(t.tackle || {}).some(Boolean))).pop();
 }
 
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+
 function viewEdit(id, tab = 'before') {
   setActiveTab(id ? '' : 'new');
   const existing = id && state.trips.find((t) => t.id === id);
@@ -302,8 +353,9 @@ function viewEdit(id, tab = 'before') {
 
   const root = mount(`
     <a class="icon-btn" href="#/" aria-label="戻る">‹</a>
-    <div class="top-title"><div>${isNew ? '新しい釣行' : '釣行の編集'}</div><div class="pos" id="save-status">${isNew ? '入力すると自動保存' : '保存済み'}</div></div>
+    <div class="top-title"><div>${isNew ? '新しい釣行' : '釣行の編集'}</div><div class="pos" id="save-status">${isNew ? '入力すると自動で保存されます' : '保存済み'}</div></div>
     <button class="btn small primary" id="done">完了</button>`);
+  setTheme(riverColor(trip.river));
 
   const setStatus = (s) => { const el = $('#save-status'); if (el) el.textContent = s; };
 
@@ -321,18 +373,19 @@ function viewEdit(id, tab = 'before') {
       history.replaceState(null, '', `#/edit/${trip.id}?tab=${tab}`);
       db.requestPersist();
     }
-    setStatus('保存済み');
+    setStatus(`✓ 保存済み ${nowHM()}`);
   }
   const touch = () => {
     dirty = true;
     setStatus('保存中…');
     clearTimeout(timer);
-    timer = setTimeout(save, 500);
+    timer = setTimeout(save, 400);
   };
   state.onLeave = save;
 
   const riverChips = state.rivers.map((r) => r.name);
   const tackleValues = (k) => [...state.trips.map((t) => t.tackle?.[k]), ...state.presets.map((p) => p.tackle?.[k])];
+  const allPoints = state.trips.flatMap((t) => [t.point, ...(t.moves || []).map((m) => m.point)]);
 
   root.innerHTML = `
     <div class="seg" role="tablist">
@@ -344,7 +397,7 @@ function viewEdit(id, tab = 'before') {
     <div class="pane" data-pane="before" ${tab === 'before' ? '' : 'hidden'}>
       <div class="row2">
         ${field('日付', input(trip, 'date', 'type="date" required'))}
-        ${field('開始時刻', input(trip, 'startTime', 'type="time"'))}
+        ${field('開始時刻', timeInput(trip, 'startTime'))}
       </div>
       ${group('河川', `${chips(trip, 'river', riverChips)}${input(trip, 'river', 'list="dl-river" placeholder="その他の河川は入力"')}`)}
       ${field('ポイント', input(trip, 'point', 'list="dl-point" placeholder="例: 仕七川小学校前"'))}
@@ -377,30 +430,29 @@ function viewEdit(id, tab = 'before') {
       </div>
       ${TACKLE_FIELDS.map(([k, label, ph]) => field(label, input(trip, `tackle.${k}`, `list="dl-t-${k}" placeholder="${esc(ph)}"`))).join('')}
 
-      <h3>オトリ・遊漁券</h3>
-      ${field('オトリ店', input(trip, 'otori.shop', 'list="dl-shop"'))}
-      <div class="row2">
-        ${field('オトリ数', `<div class="with-unit">${numInput(trip, 'otori.count', 'inputmode="numeric" min="0"')}<span>匹</span></div>`)}
-        ${field('オトリ代', `<div class="with-unit">${numInput(trip, 'otori.cost', 'inputmode="numeric" min="0"')}<span>円</span></div>`)}
-      </div>
-      ${group('遊漁券', chips(trip, 'ticket.type', TICKET_TYPES))}
-      ${field('遊漁券代', `<div class="with-unit">${numInput(trip, 'ticket.cost', 'inputmode="numeric" min="0"')}<span>円</span></div>`)}
-
       <button type="button" class="btn wide" data-tab="after">釣行後の入力へ ›</button>
+      <p class="muted center">釣行前の内容は自動で保存されています。釣行後のタブに移っても消えません。</p>
     </div>
 
     <div class="pane" data-pane="after" ${tab === 'after' ? '' : 'hidden'}>
-      ${field('終了時刻', input(trip, 'endTime', 'type="time"'))}
+      ${field('ひとこと（この日を一言で）', input(trip, 'title', 'maxlength="40" placeholder="例: 昼の荒瀬で大型連発"'))}
+      ${field('終了時刻', timeInput(trip, 'endTime'))}
       ${group('匹数', stepper(trip, 'count', '匹'), 'big')}
-      <div class="row2">
-        ${field('最大サイズ', `<div class="with-unit">${numInput(trip, 'maxSize', 'step="0.1" min="0"')}<span>cm</span></div>`)}
-        ${group('バラシ', stepper(trip, 'bare', ''))}
-      </div>
+      ${field('最大サイズ', `<div class="with-unit">${numInput(trip, 'maxSize', 'step="0.1" min="0"')}<span>cm</span></div>`)}
+      ${group('バラシ', stepper(trip, 'bare', '回'))}
       ${group('サイズ感', chips(trip, 'sizeFeel', SIZE_FEEL))}
       ${group('時合（複数可）', chips(trip, 'jiai', JIAI, true))}
-      ${group('釣れた場所（複数可）', chips(trip, 'spots', SPOTS, true))}
-      ${field('その他費用（交通費など）', `<div class="with-unit">${numInput(trip, 'otherCost', 'inputmode="numeric" min="0"')}<span>円</span></div>`)}
-      ${field('メモ', `<textarea data-path="memo" rows="5" placeholder="垢の付き具合、追い気、次回への反省など">${esc(trip.memo)}</textarea>`)}
+      ${group('釣れた場所（複数可）', `${chips(trip, 'spots', SPOTS, true)}${input(trip, 'spotsNote', 'placeholder="その他・詳しく（例: 大石の裏、左岸ヘチ）"')}`)}
+      ${group('釣り方（複数可）', chips(trip, 'methods', METHODS, true))}
+
+      <h3>移動した場所</h3>
+      <p class="muted">途中でポイントや河川を変えたときだけ追加します。</p>
+      <div id="moves"></div>
+      <button type="button" class="btn small" data-act="add-move">＋ 移動先を追加</button>
+
+      <h3>メモ・写真</h3>
+      ${group('メモ', `<textarea data-path="memo" rows="5" placeholder="垢の付き具合、追い気、次回への反省など">${esc(trip.memo)}</textarea>
+        ${SpeechRec ? '<button type="button" class="btn small mic" data-act="voice">🎤 音声で入力</button>' : ''}`)}
       ${group('写真', `<div class="photo-edit" id="photo-edit"></div>
         <label class="btn small"><input type="file" accept="image/*" multiple hidden id="photo-input">写真を追加</label>`)}
 
@@ -409,8 +461,8 @@ function viewEdit(id, tab = 'before') {
     </form>
     ${datalist('dl-river', riverNames())}
     <datalist id="dl-point"></datalist>
+    ${datalist('dl-point-all', allPoints)}
     ${datalist('dl-station', [...state.rivers.map((r) => r.station), ...state.trips.map((t) => t.station)])}
-    ${datalist('dl-shop', state.trips.map((t) => t.otori?.shop))}
     ${TACKLE_FIELDS.map(([k]) => datalist(`dl-t-${k}`, tackleValues(k))).join('')}
   `;
 
@@ -432,6 +484,17 @@ function viewEdit(id, tab = 'before') {
     $('#level-link', root).innerHTML = rs?.url
       ? `<a class="btn small level-btn" href="${esc(rs.url)}" target="_blank" rel="noopener">🌊 ${esc(rs.station || trip.river)}の水位を確認</a>`
       : '';
+    setTheme(riverColor(trip.river));
+  };
+
+  const renderMoves = () => {
+    $('#moves', root).innerHTML = trip.moves.map((m, i) => `
+      <div class="move-row" data-mi="${i}">
+        <input data-mf="time" data-time inputmode="numeric" maxlength="5" placeholder="時刻" value="${esc(m.time)}">
+        <input data-mf="river" list="dl-river" placeholder="河川" value="${esc(m.river)}">
+        <input data-mf="point" list="dl-point-all" placeholder="ポイント" value="${esc(m.point)}">
+        <button type="button" data-act="del-move" aria-label="この移動先を削除">×</button>
+      </div>`).join('');
   };
 
   const renderPhotos = () => {
@@ -453,20 +516,39 @@ function viewEdit(id, tab = 'before') {
     touch();
   });
 
+  // 移動先の入力
+  root.addEventListener('input', (e) => {
+    const el = e.target.closest('[data-mf]');
+    if (!el) return;
+    trip.moves[Number(el.closest('.move-row').dataset.mi)][el.dataset.mf] = el.value;
+    touch();
+  });
+  root.addEventListener('change', (e) => {
+    const el = e.target.closest('[data-mf="time"]');
+    if (!el) return;
+    const v = normalizeTime(el.value);
+    if (v === null) return;
+    el.value = v;
+    trip.moves[Number(el.closest('.move-row').dataset.mi)].time = v;
+    touch();
+  });
+
   root.addEventListener('click', async (e) => {
     const tabBtn = e.target.closest('[data-tab]');
     if (tabBtn) {
       tab = tabBtn.dataset.tab;
+      await save();
       $$('.seg button', root).forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
       $$('.pane', root).forEach((p) => (p.hidden = p.dataset.pane !== tab));
       if (!isNew) history.replaceState(null, '', `#/edit/${trip.id}?tab=${tab}`);
       $('#view').scrollTop = 0;
       return;
     }
-    const act = e.target.closest('[data-act]')?.dataset.act;
+    const el = e.target.closest('[data-act]');
+    const act = el?.dataset.act;
     if (act === 'sign') {
       if (has(trip.levelCm)) { trip.levelCm = -Number(trip.levelCm); refreshInputs(); touch(); }
-      else { const el = $('input[data-path="levelCm"]', root); el.focus(); }
+      else $('input[data-path="levelCm"]', root).focus();
     } else if (act === 'copy-last') {
       const last = latestOtherTrip(trip.id);
       if (!last) return toast('前回の仕掛けがありません');
@@ -482,8 +564,30 @@ function viewEdit(id, tab = 'before') {
       state.presets.push(p);
       $('#preset-select', root).insertAdjacentHTML('beforeend', `<option value="${p.id}">${esc(p.name)}</option>`);
       toast('プリセットに保存しました');
+    } else if (act === 'add-move') {
+      trip.moves.push({ time: '', river: trip.moves.at(-1)?.river || trip.river, point: '' });
+      renderMoves(); touch();
+      $$('.move-row input[data-mf="point"]', root).pop()?.focus();
+    } else if (act === 'del-move') {
+      trip.moves.splice(Number(el.closest('.move-row').dataset.mi), 1);
+      renderMoves(); touch();
+    } else if (act === 'voice') {
+      const rec = new SpeechRec();
+      rec.lang = 'ja-JP';
+      rec.interimResults = false;
+      el.disabled = true;
+      el.textContent = '🎤 聞き取り中…話してください';
+      rec.onresult = (ev) => {
+        const text = ev.results[0][0].transcript;
+        trip.memo = trip.memo ? `${trip.memo}\n${text}` : text;
+        $('textarea[data-path="memo"]', root).value = trip.memo;
+        touch();
+      };
+      rec.onerror = (ev) => toast(ev.error === 'network' ? '音声入力には電波が必要です' : '音声を聞き取れませんでした');
+      rec.onend = () => { el.disabled = false; el.textContent = '🎤 音声で入力'; };
+      rec.start();
     } else if (act === 'del-photo') {
-      trip.photos = trip.photos.filter((p) => p.id !== e.target.dataset.id);
+      trip.photos = trip.photos.filter((p) => p.id !== el.dataset.id);
       renderPhotos(); touch();
     } else if (act === 'delete') {
       if (isNew && !dirty) { location.hash = '#/'; return; }
@@ -527,6 +631,7 @@ function viewEdit(id, tab = 'before') {
   });
 
   refreshRiver();
+  renderMoves();
   renderPhotos();
 }
 
@@ -539,7 +644,7 @@ function viewSearch() {
 
   root.innerHTML = `
     <form class="form" autocomplete="off" onsubmit="return false">
-      ${field('キーワード', input(q, 'text', 'type="search" placeholder="ポイント・仕掛け・メモなど（空白でAND）"'))}
+      ${field('キーワード', input(q, 'text', 'type="search" placeholder="ポイント・仕掛け・釣り方・メモなど（空白でAND）"'))}
       ${group('河川', chips(q, 'river', riverNames()))}
       <div class="row2">
         ${field('シーズン', `<select data-path="season"><option value="">すべて</option>${seasonOpts.map((y) => `<option value="${y}" ${String(q.season) === String(y) ? 'selected' : ''}>${y}年</option>`).join('')}</select>`)}
@@ -563,9 +668,9 @@ function viewSearch() {
     const list = sortTrips(filterTrips(state.trips, q)).reverse();
     $('#hit').textContent = `${list.length}件`;
     $('#results', root).innerHTML = list.slice(0, 100).map((t) => `
-      <li><button type="button" data-open="${t.id}">
+      <li><button type="button" data-open="${t.id}" style="--river:${esc(riverColor(t.river))}">
         <span class="r-date">${formatDate(t.date)}</span>
-        <span class="r-main">${esc(t.river)} ${esc(t.point)}</span>
+        <span class="r-main">${esc(t.river)} ${esc(t.title || t.point)}</span>
         <span class="r-num">${has(t.count) ? esc(t.count) + '匹' : '-'}${has(t.maxSize) ? ` / ${esc(t.maxSize)}cm` : ''}</span>
       </button></li>`).join('') || '<li class="muted">該当なし</li>';
   };
@@ -612,15 +717,15 @@ function viewSeason(season) {
       <div class="tile"><span>総匹数</span><b>${s.totalCount}</b>匹</div>
       <div class="tile"><span>平均</span><b>${s.avgCount}</b>匹/回</div>
       <div class="tile"><span>最大サイズ</span><b>${s.maxSize ?? '-'}</b>cm</div>
-      <div class="tile"><span>総バラシ</span><b>${s.totalBare}</b>匹</div>
-      <div class="tile"><span>1匹あたり</span><b>${s.costPerFish === null ? '-' : s.costPerFish.toLocaleString()}</b>円</div>
+      <div class="tile"><span>最多釣果</span><b>${s.bestTrip ? esc(s.bestTrip.count) : '-'}</b>匹</div>
+      <div class="tile"><span>総バラシ</span><b>${s.totalBare}</b>回</div>
     </div>
     ${s.maxTrip ? `<p class="note">最大：${formatDate(s.maxTrip.date)} ${esc(s.maxTrip.river)} ${esc(s.maxTrip.point)}</p>` : ''}
-    ${s.bestTrip ? `<p class="note">最多：${esc(s.bestTrip.count)}匹（${formatDate(s.bestTrip.date)} ${esc(s.bestTrip.river)}）</p>` : ''}
-    <p class="note">費用合計：${yen(s.totalCost)}</p>
+    ${s.bestTrip ? `<p class="note">最多：${formatDate(s.bestTrip.date)} ${esc(s.bestTrip.river)} ${esc(s.bestTrip.point)}</p>` : ''}
 
     <h3>河川別</h3>
     ${table(['河川', '回数', '匹数', '平均', '最大'], s.byRiver.map((r) => [esc(r.river), r.trips, r.count, r.avg, r.max]))}
+    <p class="muted">途中で河川を移動した日は、最初の河川で数えています。</p>
     <h3>月別</h3>
     ${table(['月', '回数', '匹数', '平均', '最大'], s.byMonth.map((r) => [`${r.month}月`, r.trips, r.count, r.avg, r.max]))}
     <h3>水位（数値）別</h3>
@@ -645,16 +750,17 @@ function viewSettings() {
   const render = () => {
     root.innerHTML = `
       <h3>河川と水位ページ</h3>
-      <p class="muted">ここにある河川は入力画面でワンタップ選択できます。観測所は河川を選んだときに自動で入ります。</p>
+      <p class="muted">ここにある河川は入力画面でワンタップ選択できます。観測所は河川を選んだときに自動で入り、色はカードや画面の色になります。</p>
       <div class="river-list">
         ${state.rivers.map((r, i) => `
-          <div class="river-item" data-i="${i}">
+          <div class="river-item" data-i="${i}" style="--river:${esc(r.color || THEME_COLOR)}">
             <div class="row2">
               ${field('河川名', `<input data-rf="name" value="${esc(r.name)}">`)}
               ${field('観測所', `<input data-rf="station" value="${esc(r.station)}" placeholder="未設定">`)}
             </div>
             ${field('水位ページURL', `<input data-rf="url" type="url" value="${esc(r.url)}" placeholder="https://...">`)}
             <div class="tools">
+              <label class="color-pick"><input data-rf="color" type="color" value="${esc(r.color || THEME_COLOR)}">色</label>
               ${r.url ? `<a class="btn small" href="${esc(r.url)}" target="_blank" rel="noopener">開いて確認</a>` : ''}
               <button type="button" class="btn small danger" data-act="del-river">この河川を外す</button>
             </div>
@@ -676,7 +782,7 @@ function viewSettings() {
       </div>
 
       <h3>このアプリについて</h3>
-      <p class="muted">鮎日記 v${APP_VERSION}<br>Androidでは Chrome のメニューから「ホーム画面に追加」（または「アプリをインストール」）すると、アプリとして使えます。電波のない河原でも動きます。</p>
+      <p class="muted">鮎日記 v${APP_VERSION}<br>Androidでは Chrome のメニューから「ホーム画面に追加」（または「アプリをインストール」）すると、アプリとして使えます。電波のない河原でも動きます（音声入力だけは電波が必要です）。</p>
     `;
   };
 
@@ -685,8 +791,10 @@ function viewSettings() {
   root.addEventListener('input', (e) => {
     const el = e.target.closest('[data-rf]');
     if (!el) return;
-    const i = Number(el.closest('.river-item').dataset.i);
+    const item = el.closest('.river-item');
+    const i = Number(item.dataset.i);
     state.rivers[i][el.dataset.rf] = el.value.trim();
+    if (el.dataset.rf === 'color') item.style.setProperty('--river', el.value);
     saveRivers();
   });
   root.addEventListener('change', (e) => { if (e.target.closest('[data-rf="url"]')) render(); });
@@ -695,7 +803,7 @@ function viewSettings() {
     const btn = e.target.closest('[data-act]');
     const act = btn?.dataset.act;
     if (act === 'add-river') {
-      state.rivers.push({ name: '', station: '', url: '' });
+      state.rivers.push({ name: '', station: '', url: '', color: THEME_COLOR });
       await saveRivers(); render();
       $$('.river-item input[data-rf="name"]', root).pop()?.focus();
     } else if (act === 'del-river') {
@@ -751,7 +859,7 @@ async function route() {
   const parts = path.split('/').filter(Boolean);
   const params = new URLSearchParams(qs || '');
   switch (parts[0]) {
-    case 'new': return viewEdit(null, 'before');
+    case 'new': return viewNew(params.get('fresh') === '1');
     case 'edit': return viewEdit(parts[1], params.get('tab') || 'before');
     case 'search': return viewSearch();
     case 'season': return viewSeason(parts[1]);
@@ -763,7 +871,9 @@ async function route() {
 async function load() {
   state.trips = (await db.getAll('trips')).map(normalizeTrip);
   state.presets = await db.getAll('presets');
-  state.rivers = await db.getKV('rivers', clone(DEFAULT_RIVER_SETTINGS));
+  const rivers = await db.getKV('rivers', clone(DEFAULT_RIVER_SETTINGS));
+  // 以前に保存した設定には色がないので補う
+  state.rivers = rivers.map((r) => ({ ...r, color: r.color || defaultRiverColor(r.name) }));
 }
 
 async function start() {
@@ -776,6 +886,7 @@ async function start() {
   window.addEventListener('hashchange', route);
   // 画面を閉じる・アプリを切り替えるときも保存する
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') state.onLeave?.(); });
+  window.addEventListener('pagehide', () => state.onLeave?.());
   window.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select')) return;
     const deck = $('#deck');
