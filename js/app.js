@@ -1,16 +1,18 @@
 import * as db from './db.js';
 import {
-  DEFAULT_RIVER_SETTINGS, THEME_COLOR, defaultRiverColor,
+  DEFAULT_RIVER_SETTINGS, THEME_COLOR, defaultRiverColor, defaultRiverPos,
   WEATHER, LEVEL_WORDS, CLARITY, AKA, SIZE_FEEL, JIAI, SPOTS, METHODS, TACKLE_FIELDS,
-  newTrip, normalizeTrip, sortTrips, formatDate, formatLevel, formatMoves, normalizeTime, tackleSummary,
+  newTrip, normalizeTrip, sortTrips, formatDate, formatLevel, formatWeather, formatMoves, normalizeTime, tackleSummary,
   has, num, uid, todayISO, seasonOf,
 } from './model.js';
 import { emptyQuery, isEmptyQuery, filterTrips, describeQuery } from './search.js';
 import { summarize, seasons } from './stats.js';
 import { seasonXlsx } from './export.js';
-import { shareTrip, downloadBlob } from './share.js';
+import { shareTrip, downloadBlob, renderSeasonImage, shareBlob } from './share.js';
+import { pointStats, similarTrips, personalBests, recordBadges, newRecords } from './insights.js';
+import { fetchWeather } from './weather.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 
 const state = {
   trips: [],
@@ -189,7 +191,9 @@ function cardHtml(t) {
   const moves = formatMoves(t);
   const photo = t.photos?.[0]?.data;
   const time = t.startTime || t.endTime ? `${esc(t.startTime || '?')}〜${esc(t.endTime || '?')}` : '';
-  const weather = [t.weather, has(t.airTemp) ? `${t.airTemp}℃` : ''].filter(Boolean).join(' ');
+  const weather = formatWeather(t);
+  const ps = pointStats(state.trips, t.river, t.point);
+  const badges = recordBadges(state.trips, t);
   const level = formatLevel(t);
   const tk = TACKLE_FIELDS.filter(([k]) => t.tackle?.[k]);
 
@@ -199,6 +203,7 @@ function cardHtml(t) {
       <div class="card-place"><b>${esc(t.river || '河川未入力')}</b>${t.point ? ` ${esc(t.point)}` : ''}</div>
       ${moves.map((m) => `<div class="card-move">→ ${esc(m)}</div>`).join('')}
       ${t.title ? `<div class="card-title">「${esc(t.title)}」</div>` : ''}
+      ${badges.length ? `<div class="card-badges">${badges.map((b) => `<span>🏆 ${b}</span>`).join('')}</div>` : ''}
     </header>
     ${!has(t.count) ? `<a class="after-banner" href="#/edit/${t.id}?tab=after">釣行後の記録がまだです　入力する ›</a>` : ''}
     <section class="catch">
@@ -207,13 +212,14 @@ function cardHtml(t) {
       <div class="catch-stat"><span>バラシ</span><b>${has(t.bare) ? esc(t.bare) : '-'}</b></div>
       ${t.sizeFeel ? `<div class="catch-feel">${esc(t.sizeFeel)}</div>` : ''}
     </section>
+    ${ps && ps.trips >= 2 ? `<div class="point-stats">📍 このポイント 全${ps.trips}回・平均${ps.avg}匹・最多${ps.best}匹${ps.max ? `・最大${ps.max}cm` : ''}</div>` : ''}
     ${(t.jiai?.length || t.spots?.length || t.methods?.length || t.spotsNote) ? `<section class="pills">
       ${t.jiai?.length ? `<div><em>時合</em>${tags(t.jiai)}</div>` : ''}
       ${t.spots?.length || t.spotsNote ? `<div><em>場所</em>${tags(t.spots)}${t.spotsNote ? `<span class="pill plain">${esc(t.spotsNote)}</span>` : ''}</div>` : ''}
       ${t.methods?.length ? `<div><em>釣り方</em>${tags(t.methods, 'method')}</div>` : ''}
     </section>` : ''}
     <section class="grid">
-      ${cell('天気', esc(weather))}
+      ${cell('天気・気温', esc(weather), weather.length > 9)}
       ${cell('水温', has(t.waterTemp) ? `${esc(t.waterTemp)}℃` : '')}
       ${cell('濁り', esc(t.clarity))}
       ${cell('垢', esc(t.aka))}
@@ -350,6 +356,15 @@ function viewEdit(id, tab = 'before') {
   let isNew = !existing;
   let dirty = false;
   let timer;
+  // 自己ベスト更新の判定用：編集前のベストと、この釣行の元の値
+  const bestsBefore = personalBests(state.trips, trip.id);
+  const original = { maxSize: trip.maxSize, count: trip.count };
+  const celebrateIfRecord = () => {
+    const changed = trip.maxSize !== original.maxSize || trip.count !== original.count;
+    const recs = changed ? newRecords(bestsBefore, trip) : [];
+    if (recs.length) celebrate(recs);
+    original.maxSize = trip.maxSize; original.count = trip.count;
+  };
 
   const root = mount(`
     <a class="icon-btn" href="#/" aria-label="戻る">‹</a>
@@ -381,7 +396,7 @@ function viewEdit(id, tab = 'before') {
     clearTimeout(timer);
     timer = setTimeout(save, 400);
   };
-  state.onLeave = save;
+  state.onLeave = async () => { await save(); celebrateIfRecord(); };
 
   const riverChips = state.rivers.map((r) => r.name);
   const tackleValues = (k) => [...state.trips.map((t) => t.tackle?.[k]), ...state.presets.map((p) => p.tackle?.[k])];
@@ -401,11 +416,14 @@ function viewEdit(id, tab = 'before') {
       </div>
       ${group('河川', `${chips(trip, 'river', riverChips)}${input(trip, 'river', 'list="dl-river" placeholder="その他の河川は入力"')}`)}
       ${field('ポイント', input(trip, 'point', 'list="dl-point" placeholder="例: 仕七川小学校前"'))}
+      <div id="point-stats" class="hint"></div>
 
       <h3>状況</h3>
+      <div class="tools"><button type="button" class="btn small" data-act="weather">☀ 天気・気温を自動入力</button><span class="muted" id="weather-note"></span></div>
       ${group('天気', chips(trip, 'weather', WEATHER))}
-      <div class="row2">
-        ${field('気温', `<div class="with-unit">${numInput(trip, 'airTemp', 'step="0.1"')}<span>℃</span></div>`)}
+      <div class="row3">
+        ${field('朝の気温', `<div class="with-unit">${numInput(trip, 'tempMorning', 'step="0.1"')}<span>℃</span></div>`)}
+        ${field('最高気温(予想)', `<div class="with-unit">${numInput(trip, 'tempMax', 'step="0.1"')}<span>℃</span></div>`)}
         ${field('水温', `<div class="with-unit">${numInput(trip, 'waterTemp', 'step="0.1"')}<span>℃</span></div>`)}
       </div>
       ${group('水位', chips(trip, 'levelWord', LEVEL_WORDS))}
@@ -418,6 +436,9 @@ function viewEdit(id, tab = 'before') {
       <div id="level-link"></div>
       ${group('濁り', chips(trip, 'clarity', CLARITY))}
       ${group('垢の状態', chips(trip, 'aka', AKA))}
+
+      <h3>作戦ボード</h3>
+      <div id="board" class="board"></div>
 
       <h3>仕掛け</h3>
       <div class="tools">
@@ -487,6 +508,60 @@ function viewEdit(id, tab = 'before') {
     setTheme(riverColor(trip.river));
   };
 
+  const refreshPointStats = () => {
+    const ps = pointStats(state.trips.filter((t) => t.id !== trip.id), trip.river, trip.point);
+    $('#point-stats', root).innerHTML = ps
+      ? `📍 このポイントの過去 ${ps.trips}回：平均${ps.avg}匹・最多${ps.best}匹${ps.max ? `・最大${ps.max}cm` : ''}`
+      : '';
+  };
+
+  // 作戦ボード：同じ河川で条件の近い過去の釣行
+  const refreshBoard = () => {
+    const list = similarTrips(state.trips, trip, trip.id, 3);
+    $('#board', root).innerHTML = !trip.river
+      ? '<p class="muted">河川を選ぶと、似た条件の過去の釣行が出ます。</p>'
+      : !list.length
+        ? `<p class="muted">${esc(trip.river)}の過去の記録がまだありません。記録がたまるほど役に立ちます。</p>`
+        : `<p class="muted">水位・濁り・垢・ポイントなどが近い順です。</p>${list.map(({ trip: t, why }) => `
+          <div class="board-item" style="--river:${esc(riverColor(t.river))}">
+            <div class="board-head"><b>${formatDate(t.date)}</b> ${esc(t.point)}<span class="board-count">${esc(t.count)}匹${has(t.maxSize) ? `・${esc(t.maxSize)}cm` : ''}</span></div>
+            ${t.title ? `<div class="board-title">「${esc(t.title)}」</div>` : ''}
+            <div class="board-meta">${esc([formatLevel(t), t.clarity, t.aka ? `垢${t.aka}` : ''].filter(Boolean).join('・'))}</div>
+            ${t.methods?.length || t.spots?.length ? `<div class="board-meta">${esc([...(t.methods || []), ...(t.spots || [])].join('・'))}</div>` : ''}
+            ${tackleSummary(t.tackle) ? `<div class="board-tackle">${esc(tackleSummary(t.tackle))}</div>` : ''}
+            <div class="board-foot">
+              <span class="board-why">${why.map((w) => `<span>${esc(w)}</span>`).join('')}</span>
+              ${tackleSummary(t.tackle) ? `<button type="button" class="btn small" data-act="use-tackle" data-id="${t.id}">この仕掛けを使う</button>` : ''}
+            </div>
+          </div>`).join('')}`;
+  };
+
+  // 天気の自動入力。silent=true は河川を選んだときの自動実行（空欄のときだけ）
+  const fillWeather = async (silent) => {
+    const rs = riverSetting(trip.river);
+    let lat = rs?.lat, lon = rs?.lon;
+    if (!has(lat) || !has(lon)) {
+      if (silent) return;
+      try {
+        const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 10000 }));
+        lat = pos.coords.latitude; lon = pos.coords.longitude;
+      } catch { toast('位置がわかりません。設定画面で河川の位置を入れてください'); return; }
+    }
+    const note = $('#weather-note', root);
+    note.textContent = '取得中…';
+    try {
+      const w = await fetchWeather(lat, lon, trip.date || todayISO());
+      if (w.weather) trip.weather = w.weather;
+      if (w.tempMorning !== null) trip.tempMorning = w.tempMorning;
+      if (w.tempMax !== null) trip.tempMax = w.tempMax;
+      refreshInputs(); touch();
+      note.textContent = `${trip.river || '現在地'}付近の予報を入れました`;
+    } catch {
+      note.textContent = '';
+      if (!silent) toast(navigator.onLine ? '天気を取得できませんでした（16日より先の日付は取得できません）' : '電波がないため天気を取得できません');
+    }
+  };
+
   const renderMoves = () => {
     $('#moves', root).innerHTML = trip.moves.map((m, i) => `
       <div class="move-row" data-mi="${i}">
@@ -512,6 +587,12 @@ function viewEdit(id, tab = 'before') {
       prevRiver = trip.river;
       refreshInputs();
       refreshRiver();
+      // 天気が空欄なら自動で入れる
+      if (!trip.weather && !has(trip.tempMorning) && !has(trip.tempMax) && navigator.onLine) fillWeather(true);
+    }
+    if (['river', 'point', 'levelWord', 'levelCm', 'station', 'clarity', 'aka', 'date'].includes(path)) {
+      refreshPointStats();
+      refreshBoard();
     }
     touch();
   });
@@ -546,8 +627,15 @@ function viewEdit(id, tab = 'before') {
     }
     const el = e.target.closest('[data-act]');
     const act = el?.dataset.act;
-    if (act === 'sign') {
-      if (has(trip.levelCm)) { trip.levelCm = -Number(trip.levelCm); refreshInputs(); touch(); }
+    if (act === 'weather') {
+      fillWeather(false);
+    } else if (act === 'use-tackle') {
+      const src = state.trips.find((t) => t.id === el.dataset.id);
+      trip.tackle = { ...trip.tackle, ...clone(src.tackle) };
+      refreshInputs(); touch();
+      toast(`${formatDate(src.date)}の仕掛けを入れました`);
+    } else if (act === 'sign') {
+      if (has(trip.levelCm)) { trip.levelCm = -Number(trip.levelCm); refreshInputs(); touch(); refreshBoard(); }
       else $('input[data-path="levelCm"]', root).focus();
     } else if (act === 'copy-last') {
       const last = latestOtherTrip(trip.id);
@@ -626,13 +714,31 @@ function viewEdit(id, tab = 'before') {
   $('#done').addEventListener('click', async () => {
     await save();
     state.onLeave = null;
+    celebrateIfRecord();
     if (state.trips.some((t) => t.id === trip.id)) state.currentId = trip.id;
     location.hash = '#/';
   });
 
   refreshRiver();
+  refreshPointStats();
+  refreshBoard();
   renderMoves();
   renderPhotos();
+}
+
+// 自己ベスト更新のお祝い
+function celebrate(recs) {
+  const ov = document.createElement('div');
+  ov.className = 'celebrate';
+  ov.innerHTML = `<div class="celebrate-box">
+    <div class="celebrate-icon">🏆</div>
+    <div class="celebrate-title">自己ベスト更新！</div>
+    ${recs.map((r) => `<div class="celebrate-row">${r.kind} <b>${esc(r.value)}</b><span>（これまで ${esc(r.prev)}）</span></div>`).join('')}
+    <div class="confetti">${'🐟🎉✨'.repeat(4)}</div>
+  </div>`;
+  ov.addEventListener('click', () => ov.remove());
+  document.body.appendChild(ov);
+  setTimeout(() => ov.remove(), 4000);
 }
 
 // ---------- 検索 ----------
@@ -731,10 +837,17 @@ function viewSeason(season) {
     <h3>水位（数値）別</h3>
     ${table(['河川・観測所', '水位', '回数', '平均', '最大'], s.byLevel.map((r) => [esc(r.river + (r.station ? `・${r.station}` : '')), r.range, r.trips, r.avg, r.max]))}
 
+    <button type="button" class="btn line wide" id="season-image">🖼 まとめ画像をLINEで送る</button>
     <button type="button" class="btn primary wide" id="export">📊 ${year}シーズンをExcelで出力</button>
   ` : `<div class="empty"><p>${year}年の釣行はまだありません。</p></div>`;
 
   $('#season-select').addEventListener('change', (e) => { location.hash = `#/season/${e.target.value}`; });
+  $('#season-image', root)?.addEventListener('click', async () => {
+    toast('画像を作成中…');
+    const blob = await renderSeasonImage(year, s, riverColor);
+    const r = await shareBlob(blob, `鮎日記_${year}シーズンまとめ.png`, `【鮎日記】${year}シーズン ${s.tripCount}回 ${s.totalCount}匹${s.maxSize ? ` 最大${s.maxSize}cm` : ''}`);
+    if (r === 'downloaded') toast('画像を保存しました。LINEから送ってください');
+  });
   $('#export', root)?.addEventListener('click', () => {
     const bytes = seasonXlsx(trips, year);
     downloadBlob(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `鮎日記_${year}シーズン.xlsx`);
@@ -750,7 +863,7 @@ function viewSettings() {
   const render = () => {
     root.innerHTML = `
       <h3>河川と水位ページ</h3>
-      <p class="muted">ここにある河川は入力画面でワンタップ選択できます。観測所は河川を選んだときに自動で入り、色はカードや画面の色になります。</p>
+      <p class="muted">ここにある河川は入力画面でワンタップ選択できます。観測所は河川を選んだときに自動で入り、色はカードや画面の色になります。位置（緯度・経度）は天気の自動入力に使います。最初はおおよその値なので、よく行くポイントで「今いる場所を位置に」を押すと正確になります。</p>
       <div class="river-list">
         ${state.rivers.map((r, i) => `
           <div class="river-item" data-i="${i}" style="--river:${esc(r.color || THEME_COLOR)}">
@@ -759,8 +872,13 @@ function viewSettings() {
               ${field('観測所', `<input data-rf="station" value="${esc(r.station)}" placeholder="未設定">`)}
             </div>
             ${field('水位ページURL', `<input data-rf="url" type="url" value="${esc(r.url)}" placeholder="https://...">`)}
+            <div class="row2">
+              ${field('天気用の位置：緯度', `<input data-rf="lat" type="number" step="0.01" inputmode="decimal" value="${esc(r.lat ?? '')}">`)}
+              ${field('経度', `<input data-rf="lon" type="number" step="0.01" inputmode="decimal" value="${esc(r.lon ?? '')}">`)}
+            </div>
             <div class="tools">
               <label class="color-pick"><input data-rf="color" type="color" value="${esc(r.color || THEME_COLOR)}">色</label>
+              <button type="button" class="btn small" data-act="here">📍 今いる場所を位置に</button>
               ${r.url ? `<a class="btn small" href="${esc(r.url)}" target="_blank" rel="noopener">開いて確認</a>` : ''}
               <button type="button" class="btn small danger" data-act="del-river">この河川を外す</button>
             </div>
@@ -782,7 +900,7 @@ function viewSettings() {
       </div>
 
       <h3>このアプリについて</h3>
-      <p class="muted">鮎日記 v${APP_VERSION}<br>Androidでは Chrome のメニューから「ホーム画面に追加」（または「アプリをインストール」）すると、アプリとして使えます。電波のない河原でも動きます（音声入力だけは電波が必要です）。</p>
+      <p class="muted">鮎日記 v${APP_VERSION}<br>Androidでは Chrome のメニューから「ホーム画面に追加」（または「アプリをインストール」）すると、アプリとして使えます。電波のない河原でも動きます（音声入力と天気の自動入力だけは電波が必要です）。天気は Open-Meteo の予報データを使っています。</p>
     `;
   };
 
@@ -793,7 +911,8 @@ function viewSettings() {
     if (!el) return;
     const item = el.closest('.river-item');
     const i = Number(item.dataset.i);
-    state.rivers[i][el.dataset.rf] = el.value.trim();
+    const rf = el.dataset.rf;
+    state.rivers[i][rf] = rf === 'lat' || rf === 'lon' ? (el.value === '' ? null : Number(el.value)) : el.value.trim();
     if (el.dataset.rf === 'color') item.style.setProperty('--river', el.value);
     saveRivers();
   });
@@ -802,8 +921,16 @@ function viewSettings() {
   root.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-act]');
     const act = btn?.dataset.act;
-    if (act === 'add-river') {
-      state.rivers.push({ name: '', station: '', url: '', color: THEME_COLOR });
+    if (act === 'here') {
+      const i = Number(btn.closest('.river-item').dataset.i);
+      navigator.geolocation.getCurrentPosition((pos) => {
+        state.rivers[i].lat = Math.round(pos.coords.latitude * 1000) / 1000;
+        state.rivers[i].lon = Math.round(pos.coords.longitude * 1000) / 1000;
+        saveRivers(); render();
+        toast('今いる場所を登録しました');
+      }, () => toast('位置を取得できませんでした（位置情報の許可を確認してください）'), { timeout: 10000 });
+    } else if (act === 'add-river') {
+      state.rivers.push({ name: '', station: '', url: '', color: THEME_COLOR, lat: null, lon: null });
       await saveRivers(); render();
       $$('.river-item input[data-rf="name"]', root).pop()?.focus();
     } else if (act === 'del-river') {
@@ -873,7 +1000,7 @@ async function load() {
   state.presets = await db.getAll('presets');
   const rivers = await db.getKV('rivers', clone(DEFAULT_RIVER_SETTINGS));
   // 以前に保存した設定には色がないので補う
-  state.rivers = rivers.map((r) => ({ ...r, color: r.color || defaultRiverColor(r.name) }));
+  state.rivers = rivers.map((r) => ({ ...defaultRiverPos(r.name), ...r, color: r.color || defaultRiverColor(r.name) }));
 }
 
 async function start() {

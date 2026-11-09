@@ -114,7 +114,7 @@ select.btn { appearance: none; padding-right: 12px; }
 .card > * { background: var(--card); }
 .card-head {
   background: var(--river) center / cover no-repeat; color: #fff;
-  border-radius: 14px 14px 0 0; padding: 10px 14px 12px;
+  border-radius: 14px 14px 0 0; padding: 8px 14px 10px;
 }
 .card-head.has-photo { min-height: 118px; display: flex; flex-direction: column; justify-content: flex-end; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
 .card-date { font-size: 13px; opacity: .95; display: flex; gap: 10px; }
@@ -126,32 +126,32 @@ select.btn { appearance: none; padding-right: 12px; }
   display: block; padding: 8px 14px; background: #fff7d6 !important; color: #7a5b00; font-weight: 700;
   text-decoration: none; font-size: 13px; border-bottom: 1px solid #f0dd8a;
 }
-.catch { display: flex; align-items: flex-end; gap: 14px; padding: 8px 14px 6px; flex-wrap: wrap; }
+.catch { display: flex; align-items: flex-end; gap: 14px; padding: 6px 14px 4px; flex-wrap: wrap; }
 .catch-count { color: var(--river); font-weight: 700; font-size: 18px; }
 .catch-count b { font-size: 48px; line-height: 1; font-weight: 800; margin-right: 2px; }
 .catch-stat { color: var(--sub); }
 .catch-stat span { display: block; font-size: 11px; }
 .catch-stat b { font-size: 22px; color: var(--text); margin-right: 2px; }
 .catch-feel { margin-left: auto; background: color-mix(in srgb, var(--river) 14%, #fff); color: var(--river); border-radius: 12px; padding: 1px 10px; font-weight: 700; font-size: 13px; align-self: center; }
-.pills { padding: 2px 14px 8px; display: grid; gap: 4px; }
+.pills { padding: 2px 14px 6px; display: grid; gap: 4px; }
 .pills em { font-style: normal; color: var(--sub); font-size: 11px; display: inline-block; width: 3.6em; }
 .pill { display: inline-block; border: 1px solid color-mix(in srgb, var(--river) 45%, #fff); color: var(--river); border-radius: 10px; padding: 0 8px; margin: 1px 4px 1px 0; font-size: 13px; font-weight: 600; }
 .pill.method { background: var(--river); color: #fff; border-color: var(--river); }
 .pill.plain { border-style: dashed; }
-.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line) !important; border-top: 1px solid var(--line); }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); background: #fff !important; border-top: 1px solid var(--line); }
 .grid.tackle { grid-template-columns: repeat(3, 1fr); }
-.cell { background: #fff; padding: 5px 8px; min-width: 0; word-break: break-word; }
+.cell { padding: 3px 8px; min-width: 0; word-break: break-word; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .cell.wide { grid-column: 1 / -1; }
 .cell span { display: block; font-size: 11px; color: var(--sub); }
-.grid.tackle .cell { background: color-mix(in srgb, var(--river) 5%, #fff); }
+.grid.tackle { background: color-mix(in srgb, var(--river) 5%, #fff) !important; }
 .mini-link { text-decoration: none; font-weight: 700; padding: 0 4px; }
 .memo {
   padding: 8px 14px; white-space: pre-wrap; border-top: 1px solid var(--line);
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer;
 }
 .memo.open { display: block; }
-.strip { display: flex; gap: 6px; padding: 8px 14px; overflow-x: auto; border-top: 1px solid var(--line); }
-.strip img { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; background: var(--line); flex: none; cursor: zoom-in; }
+.strip { display: flex; gap: 6px; padding: 6px 14px; overflow-x: auto; border-top: 1px solid var(--line); }
+.strip img { width: 66px; height: 66px; object-fit: cover; border-radius: 8px; background: var(--line); flex: none; cursor: zoom-in; }
 .card > :last-child { border-radius: 0 0 14px 14px; }
 .photo-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.92); display: grid; place-items: center; }
 .photo-overlay img { max-width: 100vw; max-height: 100dvh; }
@@ -236,3 +236,32 @@ th { background: var(--main-soft); color: var(--main); font-size: 13px; }
   margin: 8px 0 0; padding: 18px 0 6px; font-size: 14px; color: var(--main); letter-spacing: .05em;
   border-top: 1px solid var(--line);
 }
+
+/* ---------- v1.2：分析・お祝い ---------- */
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 8px; }
+.row3 .with-unit span { font-size: 12px; }
+.hint { font-size: 13px; color: var(--main); font-weight: 600; margin: -6px 0 6px; min-height: 0; }
+.card-badges { margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; }
+.card-badges span { background: #ffd84d; color: #5a4300; font-weight: 800; font-size: 12px; border-radius: 10px; padding: 1px 8px; text-shadow: none; }
+.point-stats { padding: 0 14px 6px; font-size: 12px; color: var(--sub); }
+.board { display: grid; gap: 8px; }
+.board-item { background: #fff; border-radius: 12px; padding: 10px 12px; border-left: 5px solid var(--river); font-size: 14px; }
+.board-head { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.board-count { margin-left: auto; font-weight: 800; color: var(--river); }
+.board-title { font-weight: 700; }
+.board-meta { color: var(--sub); font-size: 13px; }
+.board-tackle { font-size: 13px; background: color-mix(in srgb, var(--river) 6%, #fff); border-radius: 8px; padding: 4px 8px; margin-top: 4px; }
+.board-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.board-why { flex: 1; display: flex; flex-wrap: wrap; gap: 4px; }
+.board-why span { font-size: 11px; background: var(--main-soft); color: var(--main); border-radius: 8px; padding: 0 6px; }
+.celebrate { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.55); display: grid; place-items: center; animation: fade .2s; }
+.celebrate-box { background: #fff; border-radius: 20px; padding: 24px 28px; text-align: center; max-width: 86vw; animation: pop .45s cubic-bezier(.2,1.6,.4,1); }
+.celebrate-icon { font-size: 64px; line-height: 1; }
+.celebrate-title { font-size: 24px; font-weight: 800; color: #b07d00; margin: 8px 0 10px; }
+.celebrate-row { font-size: 16px; margin: 4px 0; }
+.celebrate-row b { font-size: 22px; color: var(--main); margin: 0 4px; }
+.celebrate-row span { color: var(--sub); font-size: 13px; }
+.confetti { margin-top: 10px; font-size: 20px; letter-spacing: 4px; animation: wiggle 1s infinite alternate; }
+@keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes fade { from { opacity: 0; } }
+@keyframes wiggle { from { transform: translateY(0); } to { transform: translateY(-6px); } }

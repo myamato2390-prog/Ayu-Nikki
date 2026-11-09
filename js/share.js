@@ -1,5 +1,5 @@
 // カードを画像（PNG）にしてLINEなどへ共有する
-import { formatDate, formatLevel, has, TACKLE_FIELDS, formatMoves, THEME_COLOR } from './model.js';
+import { formatDate, formatLevel, formatWeather, has, TACKLE_FIELDS, formatMoves, THEME_COLOR } from './model.js';
 
 const W = 1080, PAD = 56;
 const C = { bg: '#f4f7f5', card: '#ffffff', main: '#0f5f57', sub: '#5b6b66', text: '#1d2a27', accent: '#e3b400', line: '#dfe7e4' };
@@ -72,7 +72,7 @@ function draw(ctx, t, photo, measureOnly, color) {
   row('時間', [t.startTime, t.endTime].some(Boolean) ? `${t.startTime || '?'}〜${t.endTime || '?'}` : '');
 
   section('状況');
-  row('天気', [t.weather, has(t.airTemp) ? `気温${t.airTemp}℃` : '', has(t.waterTemp) ? `水温${t.waterTemp}℃` : ''].filter(Boolean).join('　'));
+  row('天気', [formatWeather(t), has(t.waterTemp) ? `水温${t.waterTemp}℃` : ''].filter(Boolean).join('　'));
   row('水位', formatLevel(t));
   row('濁り・垢', [t.clarity, t.aka ? `垢：${t.aka}` : ''].filter(Boolean).join('　'));
 
@@ -108,6 +108,85 @@ export async function renderCardImage(t, color = THEME_COLOR) {
   ctx.fillStyle = C.card; ctx.fillRect(0, 0, W, h);
   draw(ctx, t, photo, false, color);
   return new Promise((res) => canvas.toBlob(res, 'image/png'));
+}
+
+// ---------- シーズンまとめ画像 ----------
+// s: stats.summarize() の結果、colorOf: 河川名 → 色
+export async function renderSeasonImage(year, s, colorOf) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = W;
+  const h = drawSeason(ctx, year, s, colorOf, true);
+  canvas.height = h;
+  drawSeason(ctx, year, s, colorOf, false);
+  return new Promise((res) => canvas.toBlob(res, 'image/png'));
+}
+
+function drawSeason(ctx, year, s, colorOf, measureOnly) {
+  const main = colorOf(s.byRiver[0]?.river);
+  let y = 0;
+  const text = (str, x, size, color = C.text, weight = 400, align = 'left') => {
+    ctx.font = `${weight} ${size}px ${FONT}`; ctx.fillStyle = color; ctx.textAlign = align;
+    if (!measureOnly) ctx.fillText(str, x, y);
+  };
+  if (!measureOnly) {
+    ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, ctx.canvas.height);
+    ctx.fillStyle = main; ctx.fillRect(0, 0, W, 210);
+  }
+  y = 92; text(`${year} シーズン`, PAD, 64, '#fff', 800);
+  y = 160; text('鮎日記 友釣りの記録', PAD, 32, '#eef7f4', 500);
+
+  // 数字のマス（3列×2段）
+  const tiles = [
+    ['釣行', s.tripCount, '回'], ['総匹数', s.totalCount, '匹'], ['平均', s.avgCount, '匹/回'],
+    ['最大', s.maxSize ?? '-', 'cm'], ['最多', s.bestTrip ? s.bestTrip.count : '-', '匹'], ['バラシ', s.totalBare, '回'],
+  ];
+  const tw = (W - PAD * 2 - 24 * 2) / 3, th = 170;
+  tiles.forEach(([label, v, unit], i) => {
+    const x = PAD + (i % 3) * (tw + 24), top = 250 + Math.floor(i / 3) * (th + 24);
+    if (!measureOnly) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(x, top, tw, th, 22); ctx.fill(); }
+    y = top + 48; text(label, x + tw / 2, 28, C.sub, 500, 'center');
+    y = top + 118; text(String(v), x + tw / 2, 64, main, 800, 'center');
+    y = top + 154; text(unit, x + tw / 2, 24, C.sub, 400, 'center');
+  });
+  y = 250 + th * 2 + 24 + 30;
+
+  const bests = [];
+  if (s.maxTrip) bests.push(`🏆 最大 ${s.maxTrip.maxSize}cm　${formatDate(s.maxTrip.date)} ${s.maxTrip.river}`);
+  if (s.bestTrip) bests.push(`🏆 最多 ${s.bestTrip.count}匹　${formatDate(s.bestTrip.date)} ${s.bestTrip.river}`);
+  for (const b of bests) { y += 56; text(b, PAD, 32, C.text, 600); }
+
+  // 横棒グラフ
+  const bars = (title, rows, colorFn) => {
+    if (!rows.length) return;
+    y += 80; text(title, PAD, 34, C.text, 800);
+    const maxV = Math.max(1, ...rows.map((r) => r.count));
+    const labelW = 190, barMax = W - PAD * 2 - labelW - 120;
+    for (const r of rows) {
+      y += 62;
+      text(r.label, PAD, 30, C.text, 600);
+      const bw = Math.max(6, Math.round((r.count / maxV) * barMax));
+      if (!measureOnly) { ctx.fillStyle = colorFn(r); ctx.beginPath(); ctx.roundRect(PAD + labelW, y - 30, bw, 38, 10); ctx.fill(); }
+      text(`${r.count}匹`, PAD + labelW + bw + 14, 28, C.sub, 600);
+    }
+  };
+  bars('河川別の釣果', s.byRiver.map((r) => ({ label: r.river, count: r.count, river: r.river })), (r) => colorOf(r.river));
+  bars('月別の釣果', s.byMonth.map((r) => ({ label: `${r.month}月`, count: r.count })), () => main);
+  return y + PAD + 20;
+}
+
+export async function shareBlob(blob, name, text) {
+  const file = new File([blob], name, { type: 'image/png' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], text });
+      return 'shared';
+    } catch (e) {
+      if (e.name === 'AbortError') return 'cancelled';
+    }
+  }
+  downloadBlob(blob, name);
+  return 'downloaded';
 }
 
 export function shareText(t) {

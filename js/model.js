@@ -5,13 +5,18 @@ export const MAIN_RIVERS = ['面河川', '土居川', '仁淀川', '久万川'];
 // 河川ごとのテーマ色：面河川＝面河グリーン、土居川・仁淀川＝仁淀ブルー
 export const THEME_COLOR = '#0f5f57';
 export const DEFAULT_RIVER_SETTINGS = [
-  { name: '面河川', station: '仕出', url: 'https://www.fishing-labo.net/modules/waterlevel/view.php?id=308041288813010', color: '#1e8a4c' },
-  { name: '土居川', station: '', url: '', color: '#0f74b5' },
-  { name: '仁淀川', station: '', url: '', color: '#0f74b5' },
-  { name: '久万川', station: '', url: '', color: THEME_COLOR },
+  // lat/lon は天気の自動入力に使うおおよその位置（設定画面で変更可）
+  { name: '面河川', station: '仕出', url: 'https://www.fishing-labo.net/modules/waterlevel/view.php?id=308041288813010', color: '#1e8a4c', lat: 33.68, lon: 133.03 },
+  { name: '土居川', station: '', url: '', color: '#0f74b5', lat: 33.57, lon: 133.15 },
+  { name: '仁淀川', station: '', url: '', color: '#0f74b5', lat: 33.53, lon: 133.25 },
+  { name: '久万川', station: '', url: '', color: THEME_COLOR, lat: 33.66, lon: 132.90 },
 ];
 export function defaultRiverColor(name) {
   return DEFAULT_RIVER_SETTINGS.find((r) => r.name === name)?.color || THEME_COLOR;
+}
+export function defaultRiverPos(name) {
+  const r = DEFAULT_RIVER_SETTINGS.find((x) => x.name === name);
+  return r ? { lat: r.lat, lon: r.lon } : { lat: null, lon: null };
 }
 
 export const WEATHER = ['晴れ', '薄曇り', '曇り', '小雨', '雨'];
@@ -53,7 +58,7 @@ export function newTrip(date = todayISO()) {
     id: uid(),
     date,
     river: '', point: '', startTime: '', endTime: '',
-    weather: '', airTemp: null, waterTemp: null,
+    weather: '', tempMorning: null, tempMax: null, waterTemp: null,
     levelWord: '', levelCm: null, station: '',
     clarity: '', aka: '',
     tackle: emptyTackle(),
@@ -71,7 +76,7 @@ export function newTrip(date = todayISO()) {
 // インポート時などに欠けた項目を補う
 export function normalizeTrip(t) {
   const base = newTrip(t.date || todayISO());
-  return {
+  const out = {
     ...base, ...t,
     id: t.id || base.id,
     tackle: { ...base.tackle, ...(t.tackle || {}) },
@@ -83,6 +88,10 @@ export function normalizeTrip(t) {
     moves: Array.isArray(t.moves) ? t.moves : [],
     photos: Array.isArray(t.photos) ? t.photos : [],
   };
+  // v1.0 の「気温」は最高気温として引き継ぐ
+  if (!has(out.tempMax) && has(t.airTemp)) out.tempMax = t.airTemp;
+  delete out.airTemp;
+  return out;
 }
 
 export const num = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v)) ? 0 : Number(v));
@@ -111,6 +120,12 @@ export function formatDate(iso) {
   return `${y}.${m}.${d}（${weekday(iso)}）`;
 }
 export const seasonOf = (t) => Number((t.date || '').slice(0, 4)) || null;
+
+// 「晴れ 朝18℃／最高31℃」
+export function formatWeather(t) {
+  const temps = [has(t.tempMorning) ? `朝${t.tempMorning}℃` : '', has(t.tempMax) ? `最高${t.tempMax}℃` : ''].filter(Boolean).join('／');
+  return [t.weather, temps].filter(Boolean).join(' ');
+}
 
 export function formatLevel(t) {
   const parts = [];
