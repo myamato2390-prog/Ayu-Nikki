@@ -1,6 +1,6 @@
 import * as db from './db.js';
 import {
-  DEFAULT_RIVER_SETTINGS, THEME_COLOR, defaultRiverColor, defaultRiverPos,
+  DEFAULT_RIVER_SETTINGS, THEME_COLOR, defaultRiverColor, defaultRiverPos, LINE_MATERIALS, composeTenjo,
   WEATHER, LEVEL_WORDS, CLARITY, AKA, SIZE_FEEL, JIAI, SPOTS, METHODS, TACKLE_FIELDS,
   newTrip, normalizeTrip, sortTrips, formatDate, formatLevel, formatWeather, formatMoves, normalizeTime, tackleSummary,
   has, num, uid, todayISO, seasonOf,
@@ -449,7 +449,10 @@ function viewEdit(id, tab = 'before') {
         </select>
         <button type="button" class="btn small" data-act="save-preset">プリセットに保存</button>
       </div>
-      ${TACKLE_FIELDS.map(([k, label, ph]) => field(label, input(trip, `tackle.${k}`, `list="dl-t-${k}" placeholder="${esc(ph)}"`))).join('')}
+      ${TACKLE_FIELDS.map(([k, label, ph]) => (k === 'tenjo'
+    ? group('天井糸', `${chips(trip, 'tackle.tenjoMat', LINE_MATERIALS)}
+        <div class="with-unit gou">${numInput(trip, 'tackle.tenjoGou', 'step="0.01" min="0" placeholder="例: 0.6"')}<span>号</span></div>`)
+    : field(label, input(trip, `tackle.${k}`, `list="dl-t-${k}" placeholder="${esc(ph)}"`)))).join('')}
 
       <button type="button" class="btn wide" data-tab="after">釣行後の入力へ ›</button>
       <p class="muted center">釣行前の内容は自動で保存されています。釣行後のタブに移っても消えません。</p>
@@ -590,6 +593,8 @@ function viewEdit(id, tab = 'before') {
       // 天気が空欄なら自動で入れる
       if (!trip.weather && !has(trip.tempMorning) && !has(trip.tempMax) && navigator.onLine) fillWeather(true);
     }
+    // 天井糸は素材と号数から表示用の文字を作る
+    if (path === 'tackle.tenjoMat' || path === 'tackle.tenjoGou') trip.tackle.tenjo = composeTenjo(trip.tackle);
     if (['river', 'point', 'levelWord', 'levelCm', 'station', 'clarity', 'aka', 'date'].includes(path)) {
       refreshPointStats();
       refreshBoard();

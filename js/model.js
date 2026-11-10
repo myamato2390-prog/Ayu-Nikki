@@ -31,10 +31,8 @@ export const TICKET_TYPES = ['日券', '年券'];
 
 export const TACKLE_FIELDS = [
   ['rod', '竿', '例: 9.0m 早瀬'],
-  ['tenjo', '天井糸', '例: PE 0.6号'],
+  ['tenjo', '天井糸', ''], // 素材＋号数から組み立てる（tenjoMat / tenjoGou）
   ['mainLine', '水中糸', '例: メタル 0.07号'],
-  ['upperLine', '上付け糸', '例: フロロ 0.6号'],
-  ['lowerLine', '下付け糸', '例: フロロ 0.3号'],
   ['hanakan', '鼻カン', '例: 6.0mm'],
   ['sakabari', '逆バリ', '例: 1号'],
   ['hook', 'ハリ', '例: 7.0号 4本イカリ'],
@@ -49,8 +47,16 @@ export function todayISO(d = new Date()) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+export const LINE_MATERIALS = ['PE', 'フロロカーボン', 'ナイロン', 'エステル'];
+
 export function emptyTackle() {
-  return Object.fromEntries(TACKLE_FIELDS.map(([k]) => [k, '']));
+  return { ...Object.fromEntries(TACKLE_FIELDS.map(([k]) => [k, ''])), tenjoMat: '', tenjoGou: null };
+}
+
+// 天井糸の表示用文字列「PE 0.6号」
+export function composeTenjo(tk) {
+  const gou = tk.tenjoGou === null || tk.tenjoGou === undefined || tk.tenjoGou === '' ? '' : `${tk.tenjoGou}号`;
+  return [tk.tenjoMat, gou].filter(Boolean).join(' ');
 }
 
 export function newTrip(date = todayISO()) {

@@ -265,3 +265,4 @@ th { background: var(--main-soft); color: var(--main); font-size: 13px; }
 @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes fade { from { opacity: 0; } }
 @keyframes wiggle { from { transform: translateY(0); } to { transform: translateY(-6px); } }
+.with-unit.gou { max-width: 200px; }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { newTrip, normalizeTrip, formatWeather } from '../js/model.js';
+import { newTrip, normalizeTrip, formatWeather, composeTenjo, TACKLE_FIELDS } from '../js/model.js';
 import { pointStats, similarTrips, personalBests, recordBadges, newRecords } from '../js/insights.js';
 import { parseWeather, wmoToWeather, fetchWeather, weatherUrl } from '../js/weather.js';
 
@@ -18,6 +18,13 @@ test('legacy airTemp migrates to tempMax', () => {
   assert.equal(t.tempMax, 30);
   assert.equal('airTemp' in t, false);
   assert.equal(formatWeather({ ...t, tempMorning: 18.5 }), '晴れ 朝18.5℃／最高30℃');
+});
+
+test('tenjo line', () => {
+  assert.equal(composeTenjo({ tenjoMat: 'PE', tenjoGou: 0.6 }), 'PE 0.6号');
+  assert.equal(composeTenjo({ tenjoMat: 'ナイロン', tenjoGou: null }), 'ナイロン');
+  assert.equal(composeTenjo({ tenjoMat: '', tenjoGou: 1 }), '1号');
+  assert.deepEqual(TACKLE_FIELDS.map(([, l]) => l), ['竿', '天井糸', '水中糸', '鼻カン', '逆バリ', 'ハリ', 'ハリス', 'オモリ・背バリ']);
 });
 
 test('pointStats', () => {
