@@ -1,9 +1,9 @@
 // オフライン用キャッシュ。ファイルを変えたら VERSION を上げる
-const VERSION = 'ayu-nikki-v1.2.1';
+const VERSION = 'ayu-nikki-v1.3.0';
 const FILES = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/app.js', './js/db.js', './js/model.js', './js/search.js', './js/stats.js',
-  './js/xlsx.js', './js/export.js', './js/share.js', './js/insights.js', './js/weather.js',
+  './js/xlsx.js', './js/export.js', './js/share.js', './js/insights.js', './js/weather.js', './js/chart.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
 ];
 

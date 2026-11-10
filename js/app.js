@@ -11,8 +11,9 @@ import { seasonXlsx } from './export.js';
 import { shareTrip, downloadBlob, renderSeasonImage, shareBlob } from './share.js';
 import { pointStats, similarTrips, personalBests, recordBadges, newRecords } from './insights.js';
 import { fetchWeather } from './weather.js';
+import { levelScatterSvg } from './chart.js';
 
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.3.0';
 
 const state = {
   trips: [],
@@ -839,6 +840,8 @@ function viewSeason(season) {
     <p class="muted">途中で河川を移動した日は、最初の河川で数えています。</p>
     <h3>月別</h3>
     ${table(['月', '回数', '匹数', '平均', '最大'], s.byMonth.map((r) => [`${r.month}月`, r.trips, r.count, r.avg, r.max]))}
+    <h3>水位と釣果</h3>
+    <div id="lv-chart"></div>
     <h3>水位（数値）別</h3>
     ${table(['河川・観測所', '水位', '回数', '平均', '最大'], s.byLevel.map((r) => [esc(r.river + (r.station ? `・${r.station}` : '')), r.range, r.trips, r.avg, r.max]))}
 
@@ -847,6 +850,7 @@ function viewSeason(season) {
   ` : `<div class="empty"><p>${year}年の釣行はまだありません。</p></div>`;
 
   $('#season-select').addEventListener('change', (e) => { location.hash = `#/season/${e.target.value}`; });
+  if ($('#lv-chart', root)) levelChart($('#lv-chart', root), year);
   $('#season-image', root)?.addEventListener('click', async () => {
     toast('画像を作成中…');
     const blob = await renderSeasonImage(year, s, riverColor);
@@ -858,6 +862,71 @@ function viewSeason(season) {
     downloadBlob(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `鮎日記_${year}シーズン.xlsx`);
     toast('Excelファイルを保存しました');
   });
+}
+
+// 水位×釣果のグラフ（観測所ごと）
+function levelChart(box, year) {
+  const withLevel = state.trips.filter((t) => has(t.levelCm) && has(t.count));
+  // 河川と観測所の組み合わせ。区切りは「|」（画面の属性に入れても壊れない文字）
+  const keyOf = (t) => `${t.river}|${t.station || ''}`;
+  const keys = uniq(withLevel.map(keyOf));
+  if (!keys.length) {
+    box.innerHTML = '<p class="muted">釣行前に「水位（数値）」を入れると、ここに水位と釣果のグラフが出ます。</p>';
+    return;
+  }
+  const nameOf = (k) => { const [r, st] = k.split('|'); return st ? `${r}・${st}` : r; };
+  // 今シーズンの点が一番多い観測所を最初に表示
+  const thisYear = (k) => withLevel.filter((t) => keyOf(t) === k && seasonOf(t) === year).length;
+  const ui = { key: [...keys].sort((a, b) => thisYear(b) - thisYear(a))[0], past: false, labels: true, sel: null };
+
+  const render = () => {
+    const [river] = ui.key.split('|');
+    const color = riverColor(river);
+    const list = withLevel.filter((t) => keyOf(t) === ui.key && (ui.past || seasonOf(t) === year));
+    const points = list.map((t) => {
+      const [y, m, d] = t.date.split('-').map(Number);
+      const past = seasonOf(t) !== year;
+      return {
+        id: t.id, count: Number(t.count), level: Number(t.levelCm), past,
+        label: `${past ? `${String(y).slice(2)}/` : ''}${m}/${d}`,
+      };
+    });
+    const width = Math.max(300, Math.min(600, box.clientWidth || 360));
+    const chart = points.length ? levelScatterSvg(points, { width, height: Math.round(width * 0.85), color, labels: ui.labels }) : null;
+    const sel = (ui.sel || []).map((id) => state.trips.find((t) => t.id === id)).filter(Boolean);
+    box.innerHTML = `
+      ${keys.length > 1 ? `<div class="chips small">${keys.map((k) => `<button type="button" class="chip${k === ui.key ? ' on' : ''}" data-lk="${esc(k)}">${esc(nameOf(k))}</button>`).join('')}</div>` : `<p class="chart-sub">${esc(nameOf(ui.key))}の水位</p>`}
+      <div class="chart-opts">
+        <label><input type="checkbox" data-opt="past" ${ui.past ? 'checked' : ''}> 過去のシーズンも表示</label>
+        <label><input type="checkbox" data-opt="labels" ${ui.labels ? 'checked' : ''}> 日付を表示</label>
+      </div>
+      ${ui.past ? `<div class="chart-legend"><span><i style="background:${esc(color)}"></i>${year}年</span><span><i style="background:#a9b5b1"></i>過去のシーズン</span></div>` : ''}
+      ${chart ? `<div class="chart" style="--river:${esc(color)}">${chart.svg}</div>` : `<p class="muted">${year}年はこの観測所の水位（数値）が入った釣行がありません。「過去のシーズンも表示」で過去の記録を見られます。</p>`}
+      ${chart?.hidden ? `<p class="muted">重なるため${chart.hidden}件の日付を省きました。点をタップすると見られます。</p>` : ''}
+      ${sel.length ? sel.map((t) => `<div class="chart-sel" style="--river:${esc(color)}">
+        <div><b>${formatDate(t.date)}</b> ${esc(t.point)}</div>
+        <div>${esc(t.count)}匹${has(t.maxSize) ? `・最大${esc(t.maxSize)}cm` : ''}・水位${esc(formatLevel(t))}</div>
+        <button type="button" class="btn small" data-open-card="${t.id}">カードを見る ›</button></div>`).join('') : '<p class="muted">点をタップすると、その日の内容が出ます。</p>'}`;
+  };
+
+  box.addEventListener('click', (e) => {
+    const k = e.target.closest('[data-lk]');
+    const pt = e.target.closest('[data-pt]');
+    const open = e.target.closest('[data-open-card]');
+    if (k) { ui.key = k.dataset.lk; ui.sel = null; render(); }
+    else if (pt) {
+      // 近くに重なっている点もまとめて出す
+      const near = $$('[data-pt]', box).filter((g) => Math.hypot(g.dataset.x - pt.dataset.x, g.dataset.y - pt.dataset.y) <= 10);
+      ui.sel = near.map((g) => g.dataset.pt);
+      render();
+    }
+    else if (open) { state.query = emptyQuery(); state.currentId = open.dataset.openCard; location.hash = '#/'; }
+  });
+  box.addEventListener('change', (e) => {
+    const opt = e.target.dataset.opt;
+    if (opt) { ui[opt] = e.target.checked; render(); }
+  });
+  render();
 }
 
 // ---------- 設定 ----------
