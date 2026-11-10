@@ -31,6 +31,7 @@ export const TICKET_TYPES = ['日券', '年券'];
 
 export const TACKLE_FIELDS = [
   ['rod', '竿', '例: 9.0m 早瀬'],
+  ['tenjo', '天井糸', '例: PE 0.6号'],
   ['mainLine', '水中糸', '例: メタル 0.07号'],
   ['upperLine', '上付け糸', '例: フロロ 0.6号'],
   ['lowerLine', '下付け糸', '例: フロロ 0.3号'],

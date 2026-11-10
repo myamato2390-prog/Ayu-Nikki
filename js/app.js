@@ -12,7 +12,7 @@ import { shareTrip, downloadBlob, renderSeasonImage, shareBlob } from './share.j
 import { pointStats, similarTrips, personalBests, recordBadges, newRecords } from './insights.js';
 import { fetchWeather } from './weather.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 
 const state = {
   trips: [],
