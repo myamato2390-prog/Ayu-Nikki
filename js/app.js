@@ -13,7 +13,7 @@ import { pointStats, similarTrips, personalBests, recordBadges, newRecords } fro
 import { fetchWeather } from './weather.js';
 import { levelScatterSvg } from './chart.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 
 const state = {
   trips: [],
