@@ -19,7 +19,7 @@ import {
   makeCardPack, checkCardPack, importCardPack, friendsOf, analysisTrips, ownTrips, isShared, sharedFrom,
 } from './cards.js';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 
 const state = {
   trips: [],
@@ -29,7 +29,6 @@ const state = {
   currentId: null,
   onLeave: null,
   myName: '', // カードをあげるときの名前
-  cardsOn: false, // 「カードのやりとり（試験中）」のスイッチ。入れた人だけ、あげる画面が出る
   useShared: true, // 分析に仲間のカードを入れる
   friends: {}, // 仲間ごとの設定 { 名前: { use: false } }
 };
@@ -441,11 +440,11 @@ function viewCards() {
     const r = await shareTrip(t, riverColor(t.river));
     if (r === 'downloaded') toast('画像を保存しました。LINEから送ってください');
   };
-  // 送り方を選ぶ（お豆日記と同じ）。「カードのやりとり（試験中）」を入れていないときは、今までどおり画像で送る
+  // 送り方を選ぶ（お豆日記と同じ）：画像で送る／カードであげる
   $('#share-btn').onclick = () => {
     const t = current();
     if (!t) return;
-    if (!state.cardsOn || isShared(t)) return shareImage(t);
+    if (isShared(t)) return shareImage(t); // 仲間のカードは画像でだけ送れる（カードとしてはあげ直さない）
     sheet(`
       <div class="memo-sheet-head"><span>このカードを送る</span><button type="button" class="memo-close" data-sheet="close" aria-label="閉じる">×</button></div>
       <div class="memo-sheet-body">
@@ -1188,16 +1187,15 @@ function viewSettings() {
         : '<p class="muted">入力画面の「仕掛け」欄にある「プリセットに保存」から登録できます。</p>'}
 
       <h3>仲間とカードのやりとり</h3>
-      <label class="check"><input type="checkbox" id="cards-on" ${state.cardsOn ? 'checked' : ''}> カードのやりとり（試験中）を使う</label>
-      <p class="muted">自分のカードを LINE で仲間に送ったり、仲間からもらったカードを見たりできます。いまは試験中なので、使う人だけスイッチを入れてください。もらったカードのリンクは、スイッチを入れていなくても読み込めます。</p>
-      ${state.cardsOn ? `<div class="send-box">
+      <p class="muted">自分のカードを LINE で仲間に送ったり、仲間からもらったカードを見たりできます。もらったカードは「◯◯さんのカード」として入り、直すことはできません。</p>
+      <div class="send-box">
         ${field('あなたの名前（カードをあげると、相手のアプリに「◯◯さんのカード」と出ます）', `<input id="my-name" value="${esc(state.myName)}" placeholder="例: たろう" maxlength="20">`)}
         <p class="muted name-hint" ${state.myName ? 'hidden' : ''}>まだ名前が入っていません。カードをあげる前に入れてください。</p>
         ${field('あげるカードの年', `<select id="send-year"><option value="">すべて</option>${seasons(mine()).map((y) => `<option value="${y}">${y}年</option>`).join('')}</select>`)}
         <div class="tools"><button type="button" class="btn primary" data-act="send-cards">📇 カードをあげる</button></div>
         <p class="muted">1枚だけあげるときは、カード画面の ⤴ から「カードであげる」を選びます。もらうときは、LINEに届いたリンクを押すだけです。うまく開かないときは、メッセージを長押しして「コピー」してから下のボタンを押してください。</p>
         <div class="tools"><button type="button" class="btn" data-act="paste-cards">📋 貼り付けて読み込む</button></div>
-      </div>` : ''}
+      </div>
       <div id="friend-list"></div>
 
       <h3>記録を1件ずつ消す</h3>
@@ -1272,14 +1270,7 @@ function viewSettings() {
     if (el.dataset.rf === 'color') item.style.setProperty('--river', el.value);
     saveRivers();
   });
-  root.addEventListener('change', async (e) => {
-    if (e.target.closest('[data-rf="url"]')) render();
-    if (e.target.id === 'cards-on') {
-      state.cardsOn = e.target.checked;
-      await db.setKV('cardsOn', state.cardsOn);
-      render();
-    }
-  });
+  root.addEventListener('change', (e) => { if (e.target.closest('[data-rf="url"]')) render(); });
 
   root.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-act]');
@@ -1452,7 +1443,6 @@ async function load() {
   // 以前に保存した設定には色がないので補う
   state.rivers = rivers.map((r) => ({ ...defaultRiverPos(r.name), ...r, color: r.color || defaultRiverColor(r.name) }));
   state.myName = await db.getKV('myName', '');
-  state.cardsOn = await db.getKV('cardsOn', false);
   state.useShared = await db.getKV('useShared', true);
   state.friends = await db.getKV('friends', {});
 }

@@ -3,7 +3,7 @@
 // テスト版（/preview/）は名前を分け、本番・テスト版・お豆日記のキャッシュを互いに消さない
 const TEST = self.location.pathname.includes('/preview/');
 const PREFIX = TEST ? 'ayu-nikki-test-v' : 'ayu-nikki-v';
-const VERSION = `${PREFIX}1.4.0`;
+const VERSION = `${PREFIX}1.5.0`;
 const FILES = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/app.js', './js/db.js', './js/model.js', './js/search.js', './js/stats.js',
