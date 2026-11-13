@@ -11,9 +11,10 @@ import { seasonXlsx } from './export.js';
 import { shareTrip, downloadBlob, renderSeasonImage, shareBlob } from './share.js';
 import { pointStats, similarTrips, personalBests, recordBadges, newRecords } from './insights.js';
 import { fetchWeather } from './weather.js';
+import { checkBackup, planImport } from './backup.js';
 import { levelScatterSvg } from './chart.js';
 
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.3.3';
 
 const state = {
   trips: [],
@@ -1057,19 +1058,40 @@ function viewSettings() {
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
+    let data;
+    try { data = JSON.parse(await file.text()); } catch { return toast('バックアップファイルを読み込めませんでした'); }
+    const check = checkBackup(data);
+    if (!check.ok) return toast(check.message);
+    // 今ある記録は消さない。同じ記録は新しい方を残す
+    // 比べる相手は、画面が覚えている一覧ではなく保存先から読んだ最新の記録にする
+    let current;
     try {
-      const data = JSON.parse(await file.text());
-      if (data.app !== 'ayu-nikki' || !Array.isArray(data.trips)) throw new Error('format');
-      if (!confirm(`${data.trips.length}件の釣行を読み込みます。同じ記録は上書きされます。よろしいですか？`)) return;
-      const trips = data.trips.map(normalizeTrip);
-      await db.putMany('trips', trips);
-      if (Array.isArray(data.presets)) await db.putMany('presets', data.presets);
-      if (Array.isArray(data.rivers) && data.rivers.length) { state.rivers = data.rivers; await saveRivers(); }
+      current = { trips: await db.getAll('trips'), presets: await db.getAll('presets'), rivers: state.rivers };
+    } catch {
+      return toast('今ある記録を読めなかったので、読み込みをやめました');
+    }
+    const plan = planImport(data, current);
+    if (!plan.trips.length && !plan.presets.length && !plan.rivers.length) {
+      return toast('新しい記録はありませんでした。今ある記録はそのままです');
+    }
+    const lines = [
+      `${plan.total}件のうち、次のものを読み込みます。`,
+      `・新しい記録 ${plan.added}件`,
+      plan.updated ? `・こちらより新しく直された記録 ${plan.updated}件` : '',
+      plan.presets.length ? `・仕掛けプリセット ${plan.presets.length}件` : '',
+      plan.rivers.length ? `・河川 ${plan.rivers.map((r) => r.name).join('、')}` : '',
+      '今ある記録は消えません。よろしいですか？',
+    ].filter(Boolean);
+    if (!confirm(lines.join('\n'))) return;
+    try {
+      await db.putMany('trips', plan.trips);
+      if (plan.presets.length) await db.putMany('presets', plan.presets);
+      if (plan.rivers.length) { state.rivers = [...state.rivers, ...plan.rivers]; await saveRivers(); }
       await load();
-      toast(`${trips.length}件を読み込みました`);
+      toast(`${plan.trips.length}件を読み込みました`);
       render();
     } catch {
-      toast('バックアップファイルを読み込めませんでした');
+      toast('読み込みの途中で失敗しました。今ある記録はそのままです');
     }
   });
 
