@@ -1,7 +1,7 @@
 // オフライン用キャッシュ。ファイルを変えたら VERSION を上げる
 // キャッシュは同じ github.io の中で共通なので、名前の頭（PREFIX）で自分のものだけを見分ける
 const PREFIX = 'ayu-nikki-v';
-const VERSION = `${PREFIX}1.3.3`;
+const VERSION = `${PREFIX}1.3.4`;
 const FILES = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/app.js', './js/db.js', './js/model.js', './js/search.js', './js/stats.js',

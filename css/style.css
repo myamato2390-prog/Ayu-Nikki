@@ -83,6 +83,21 @@ a { color: var(--main-2); }
 .btn.small { min-height: 36px; padding: 0 12px; font-size: 14px; }
 .btn.primary { background: var(--main); border-color: var(--main); color: #fff; }
 .btn.danger { color: var(--danger); border-color: #efc9c4; }
+.btn.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* 「元に戻す」付きのお知らせ */
+.toast.with-action { pointer-events: auto; display: flex; align-items: center; gap: 12px; }
+.toast button { border: 0; background: #ffd84d; color: #3a2a00; font-weight: 800; border-radius: 14px; padding: 6px 12px; cursor: pointer; }
+
+/* 記録を1件ずつ消す */
+.del-box summary { cursor: pointer; padding: 10px 12px; background: #fff; border-radius: 10px; font-size: 14px; color: var(--sub); }
+.del-box[open] summary { margin-bottom: 6px; }
+.del-list { list-style: none; padding: 0; margin: 0; }
+.del-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: #fff; border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; font-size: 14px; }
+.del-list li.asking { outline: 2px solid var(--danger); }
+.del-main { display: grid; gap: 2px; min-width: 0; }
+.del-main span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.del-acts { display: flex; gap: 6px; flex: none; }
 .btn.line { background: var(--line-green); border-color: var(--line-green); color: #fff; }
 .btn.wide { display: flex; width: 100%; margin-top: 24px; }
 .top .btn.primary { background: #fff; color: var(--main); border: 0; }
