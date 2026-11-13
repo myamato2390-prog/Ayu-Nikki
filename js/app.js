@@ -13,7 +13,7 @@ import { pointStats, similarTrips, personalBests, recordBadges, newRecords } fro
 import { fetchWeather } from './weather.js';
 import { levelScatterSvg } from './chart.js';
 
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.2';
 
 const state = {
   trips: [],
@@ -168,6 +168,20 @@ function bindControls(root, obj, onChange) {
   });
 }
 
+// ---------- メモの全文表示 ----------
+// カードには3行だけ出し、押すと下から出る画面でメモ全体を大きく見せる
+function showMemo(t) {
+  const ov = document.createElement('div');
+  ov.className = 'memo-overlay';
+  ov.innerHTML = `<div class="memo-sheet" role="dialog" aria-label="メモ">
+      <div class="memo-sheet-head"><span>${formatDate(t.date)} ${esc(t.river || '')}のメモ</span>
+        <button type="button" class="memo-close" aria-label="閉じる">×</button></div>
+      <div class="memo-sheet-body">${esc(t.memo)}</div>
+    </div>`;
+  ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.memo-close')) ov.remove(); });
+  document.body.appendChild(ov);
+}
+
 // ---------- 写真の拡大表示 ----------
 function showPhoto(src) {
   const ov = document.createElement('div');
@@ -227,7 +241,7 @@ function cardHtml(t) {
       ${cell('水位', level ? esc(level) + (rs?.url ? ` <a href="${esc(rs.url)}" target="_blank" rel="noopener" class="mini-link">↗</a>` : '') : '', true)}
     </section>
     ${tk.length ? `<section class="grid tackle">${tk.map(([k, label]) => cell(label, esc(t.tackle[k]))).join('')}</section>` : ''}
-    ${t.memo ? `<section class="memo" data-act="memo">${esc(t.memo)}</section>` : ''}
+    ${t.memo ? `<section class="memo" data-act="memo" data-id="${t.id}"><div class="memo-text">${esc(t.memo)}</div><div class="memo-more" hidden>▼ 続きを読む</div></section>` : ''}
     ${t.photos?.length > 1 || (t.photos?.length === 1) ? `<section class="strip">${t.photos.map((p) => `<img data-src="${p.data}" alt="写真" data-act="photo">`).join('')}</section>` : ''}
   </article>`;
 }
@@ -268,7 +282,7 @@ function viewCards() {
     const el = e.target.closest('[data-act]');
     const act = el?.dataset.act;
     if (act === 'clear-search') { state.query = emptyQuery(); viewCards(); }
-    else if (act === 'memo') el.classList.toggle('open');
+    else if (act === 'memo') { const t = state.trips.find((x) => x.id === el.dataset.id); if (t) showMemo(t); }
     else if (act === 'photo' && el.src) showPhoto(el.src);
   });
   $('#edit-btn').onclick = () => { if (state.currentId) location.hash = `#/edit/${state.currentId}`; };
@@ -295,6 +309,9 @@ function viewCards() {
       $$('img[data-src]', card).forEach((img) => { img.src = img.dataset.src; img.removeAttribute('data-src'); });
       const head = $('.card-head[data-bg]', card);
       if (head) { head.style.backgroundImage = `linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.55)),url("${head.dataset.bg}")`; head.removeAttribute('data-bg'); }
+      // 3行に収まらないときだけ「続きを読む」を出す
+      const mt = $('.memo-text', card);
+      if (mt) $('.memo-more', card).hidden = mt.scrollHeight <= mt.clientHeight + 2;
     });
   };
   $$('[data-nav]').forEach((b) => {
@@ -375,12 +392,20 @@ function viewEdit(id, tab = 'before') {
 
   const setStatus = (s) => { const el = $('#save-status'); if (el) el.textContent = s; };
 
+  // 保存できたら true。失敗したら「⚠ 保存できませんでした」と出し、次の入力や「完了」でもう一度保存する
   async function save() {
     clearTimeout(timer);
-    if (!dirty) return;
+    if (!dirty) return true;
     dirty = false;
     trip.updatedAt = new Date().toISOString();
-    await db.put('trips', clone(trip));
+    try {
+      await db.put('trips', clone(trip));
+    } catch {
+      dirty = true;
+      setStatus('⚠ 保存できませんでした');
+      toast('保存できませんでした。スマホの空き容量を確認してください');
+      return false;
+    }
     const i = state.trips.findIndex((t) => t.id === trip.id);
     if (i >= 0) state.trips[i] = clone(trip); else state.trips.push(clone(trip));
     state.currentId = trip.id;
@@ -390,6 +415,7 @@ function viewEdit(id, tab = 'before') {
       db.requestPersist();
     }
     setStatus(`✓ 保存済み ${nowHM()}`);
+    return true;
   }
   const touch = () => {
     dirty = true;
@@ -397,7 +423,7 @@ function viewEdit(id, tab = 'before') {
     clearTimeout(timer);
     timer = setTimeout(save, 400);
   };
-  state.onLeave = async () => { await save(); celebrateIfRecord(); };
+  state.onLeave = async () => { if (await save()) celebrateIfRecord(); };
 
   const riverChips = state.rivers.map((r) => r.name);
   const tackleValues = (k) => [...state.trips.map((t) => t.tackle?.[k]), ...state.presets.map((p) => p.tackle?.[k])];
@@ -718,7 +744,8 @@ function viewEdit(id, tab = 'before') {
   });
 
   $('#done').addEventListener('click', async () => {
-    await save();
+    // 保存できなかったときは画面を閉じない（入力が消えないように）
+    if (!(await save())) return;
     state.onLeave = null;
     celebrateIfRecord();
     if (state.trips.some((t) => t.id === trip.id)) state.currentId = trip.id;
