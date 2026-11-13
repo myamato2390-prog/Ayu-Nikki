@@ -14,7 +14,7 @@ import { fetchWeather } from './weather.js';
 import { checkBackup, planImport } from './backup.js';
 import { levelScatterSvg } from './chart.js';
 
-const APP_VERSION = '1.3.4';
+const APP_VERSION = '1.3.5';
 
 const state = {
   trips: [],
@@ -1039,7 +1039,7 @@ function viewSettings() {
       <p class="muted">読み込んでも、今ある記録は消えません（同じ記録は新しい方を残します）。</p>
 
       <h3>このアプリについて</h3>
-      <p class="muted">鮎日記 v${APP_VERSION}<br>Androidでは Chrome のメニューから「ホーム画面に追加」（または「アプリをインストール」）すると、アプリとして使えます。電波のない河原でも動きます（音声入力と天気の自動入力だけは電波が必要です）。天気は Open-Meteo の予報データを使っています。</p>
+      <p class="muted">鮎日記 v${APP_VERSION}${db.IS_TEST ? '（テスト版：本番とは別の保存場所です）' : ''}<br>Androidでは Chrome のメニューから「ホーム画面に追加」（または「アプリをインストール」）すると、アプリとして使えます。電波のない河原でも動きます（音声入力と天気の自動入力だけは電波が必要です）。天気は Open-Meteo の予報データを使っています。</p>
     `;
     renderDelList();
   };
@@ -1196,6 +1196,12 @@ async function load() {
 }
 
 async function start() {
+  // テスト版は画面の上に赤い帯を出して、本番と見分けられるようにする
+  if (db.IS_TEST) {
+    document.body.classList.add('is-test');
+    document.body.insertAdjacentHTML('afterbegin', '<div class="test-band">テスト版（本番の記録とは別です）</div>');
+    document.title = '【テスト版】' + document.title;
+  }
   try {
     await load();
   } catch (e) {

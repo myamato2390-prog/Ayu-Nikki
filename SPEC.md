@@ -116,6 +116,17 @@
 - 1匹ごとの釣果記録
 - オトリ店・費用の記録（v1.1で削除。不要のため）
 
+### 5-2. テスト版で確かめてから本番に出す（v1.3.5）
+
+1. 作業ブランチで直して push → GitHub Actions（`.github/workflows/pages.yml`）が数分でテスト版 `…/Ayu-Nikki/preview/` に公開する（GitHub Pages は main からしか公開できない初期設定のため、作業ブランチの push は「main から公開し直す」依頼だけを出し、公開そのものは main で行う）
+2. 作者がスマホでテスト版を触って確かめる（画面の上に赤い「テスト版」の帯）
+3. 問題なければ作者が「main に反映して」→ 本番と仲間のスマホに届く
+
+- 記録の保存場所を分ける（本番 `ayu-nikki`、テスト版 `ayu-nikki-test`）。テスト版で本番の記録には触れない
+- キャッシュ名も分ける（本番 `ayu-nikki-v…`、テスト版 `ayu-nikki-test-v…`）。Service Worker は自分の名前で始まるキャッシュだけを消す（同じ github.io のお豆日記のキャッシュを消さない）。本番の Service Worker はテスト版のファイルを扱わない
+- 準備（1回だけ）：GitHub の Settings → Pages の Source を「GitHub Actions」にする
+- 公開が GitHub 側の一時的な不具合で失敗したときは、同じ回を re-run せず、新しい回として動かし直す（workflow_dispatch）
+
 ## 6. 搭載したい機能一覧（ロードマップ）
 
 | 状態 | 区分 | 機能 | 内容 |

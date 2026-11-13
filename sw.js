@@ -1,7 +1,9 @@
 // オフライン用キャッシュ。ファイルを変えたら VERSION を上げる
 // キャッシュは同じ github.io の中で共通なので、名前の頭（PREFIX）で自分のものだけを見分ける
-const PREFIX = 'ayu-nikki-v';
-const VERSION = `${PREFIX}1.3.4`;
+// テスト版（/preview/）は名前を分け、本番・テスト版・お豆日記のキャッシュを互いに消さない
+const TEST = self.location.pathname.includes('/preview/');
+const PREFIX = TEST ? 'ayu-nikki-test-v' : 'ayu-nikki-v';
+const VERSION = `${PREFIX}1.3.5`;
 const FILES = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/app.js', './js/db.js', './js/model.js', './js/search.js', './js/stats.js',
@@ -24,6 +26,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  // 本番の Service Worker は、テスト版（/preview/）のファイルを扱わない
+  if (!TEST && url.pathname.includes('/preview/')) return;
   e.respondWith(caches.open(VERSION).then(async (cache) => {
     const cached = await cache.match(e.request, { ignoreSearch: true });
     const network = fetch(e.request).then((res) => {

@@ -23,12 +23,18 @@
 
 ## スマホで使う（GitHub Pages で公開）
 
-1. このブランチを `main` にマージする
-2. GitHub のリポジトリ → **Settings → Pages** → Source を「Deploy from a branch」、Branch を `main` / `/ (root)` にして保存
-3. 数分後に表示される URL（`https://<ユーザー名>.github.io/Ayu-Nikki/`）を Android の Chrome で開く
-4. Chrome のメニュー →「ホーム画面に追加」（または「アプリをインストール」）
+1. 本番の URL（`https://myamato2390-prog.github.io/Ayu-Nikki/`）を Android の Chrome で開く
+2. Chrome のメニュー →「ホーム画面に追加」（または「アプリをインストール」）
 
 友人にも同じ URL を送れば、各自のスマホで使えます（記録は各自の端末に別々に保存されます）。
+
+## テスト版
+
+- 本番：`https://myamato2390-prog.github.io/Ayu-Nikki/`（main）
+- テスト版：`https://myamato2390-prog.github.io/Ayu-Nikki/preview/`（最後に push した作業ブランチ）。画面の上に赤い「テスト版」の帯が出る。記録は本番とは別の場所（`ayu-nikki-test`）に保存される
+- 公開は GitHub Actions（`.github/workflows/pages.yml`）。Settings → Pages の Source を「GitHub Actions」にしておく
+- 流れ：作業ブランチで直して push → 数分でテスト版に出る → スマホで確かめる → 「main に反映して」→ 本番と仲間のスマホに届く
+- 本番と同じ記録で試すときは、本番で書き出したバックアップをテスト版で読み込む（コピーなので本番は安全）
 
 ## 開発
 
