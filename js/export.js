@@ -7,6 +7,7 @@ const n = (v) => (has(v) ? Number(v) : null);
 
 const LIST_COLUMNS = [
   ['日付', 11, (t) => t.date],
+  ['記録した人', 10, (t) => (t.shared?.from ? `${t.shared.from}さん` : '自分')],
   ['曜日', 5, (t) => weekday(t.date)],
   ['河川', 9, (t) => t.river],
   ['ポイント', 18, (t) => t.point],

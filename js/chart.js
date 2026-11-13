@@ -62,9 +62,11 @@ export function levelScatterSvg(points, { width = 360, height = 320, color = '#0
   const levels = points.map((p) => p.level);
   const yStep = niceStep(Math.max(...counts, 5), 5);
   const yMax = Math.ceil(Math.max(...counts, 1) / yStep) * yStep;
-  const xStep = niceStep(Math.max(...levels) - Math.min(...levels), 5);
-  let xMin = Math.floor(Math.min(...levels, 0) / xStep) * xStep;
-  let xMax = Math.ceil(Math.max(...levels, 0) / xStep) * xStep;
+  // 目盛りの間隔は、軸全体（0cm を含む）の幅で決める。水位は cm の整数なので 1cm より細かくしない
+  const lo = Math.min(...levels, 0), hi = Math.max(...levels, 0);
+  const xStep = Math.max(1, niceStep(hi - lo, 5));
+  let xMin = Math.floor(lo / xStep) * xStep;
+  let xMax = Math.ceil(hi / xStep) * xStep;
   if (xMin === Math.min(...levels)) xMin -= xStep;
   if (xMax === Math.max(...levels)) xMax += xStep;
 

@@ -23,6 +23,17 @@ test('labels never overlap each other', () => {
   assert.ok(textWidth('7/12', 10) < textWidth('七月', 10) * 2);
 });
 
+test('water level ticks stay readable when levels are close together', () => {
+  const { svg } = levelScatterSvg([
+    { id: 'a', count: 20, level: -12, label: '7/1' },
+    { id: 'b', count: 8, level: -10, label: '7/3' },
+  ]);
+  // 横軸（水位）の目盛りの数字を数える：0.5cm 刻みにならず、5本前後
+  const ticks = [...svg.matchAll(/text-anchor="middle">([^<]+)</g)].map((m) => m[1]);
+  assert.ok(ticks.length <= 8, ticks.join(','));
+  assert.ok(ticks.every((t) => !t.includes('.')), ticks.join(','));
+});
+
 test('svg output', () => {
   const { svg, hidden } = levelScatterSvg([
     { id: 'a', count: 18, level: -15, label: '7/12 24.5cm' },

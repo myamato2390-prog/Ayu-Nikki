@@ -316,3 +316,16 @@ th { background: var(--main-soft); color: var(--main); font-size: 13px; }
 .chart-sel .btn { justify-self: start; margin-top: 4px; }
 .chart-sel { border-left-color: var(--river, var(--main)); }
 .chart .leader { stroke: #9aa8a4; stroke-width: 1; }
+
+/* ---------- 仲間とカードのやりとり ---------- */
+.friend-tag { display: inline-block; margin-top: 4px; font-size: 12px; font-weight: 800; color: #fff; background: rgba(255,255,255,.18); border: 1px dashed rgba(255,255,255,.75); border-radius: 8px; padding: 0 8px; }
+.friend-mini { font-size: 11px; font-weight: 700; color: var(--sub); margin: 0 6px 0 4px; white-space: nowrap; }
+.action-sheet .memo-sheet-body .btn.wide { margin-top: 10px; }
+.action-sheet .memo-sheet-body { white-space: normal; font-size: 15px; }
+.check { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-weight: 600; }
+.check input { width: 22px; height: 22px; }
+.send-box { background: #fff; border-radius: 12px; padding: 4px 12px 6px; margin-bottom: 8px; }
+.shared-box { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+.shared-box .chip { min-height: 36px; }
+.friend-main span { white-space: normal !important; }
+.friend-main b { white-space: nowrap; }

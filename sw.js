@@ -3,11 +3,11 @@
 // テスト版（/preview/）は名前を分け、本番・テスト版・お豆日記のキャッシュを互いに消さない
 const TEST = self.location.pathname.includes('/preview/');
 const PREFIX = TEST ? 'ayu-nikki-test-v' : 'ayu-nikki-v';
-const VERSION = `${PREFIX}1.3.5`;
+const VERSION = `${PREFIX}1.4.0`;
 const FILES = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/app.js', './js/db.js', './js/model.js', './js/search.js', './js/stats.js',
-  './js/xlsx.js', './js/export.js', './js/share.js', './js/insights.js', './js/weather.js', './js/chart.js', './js/backup.js',
+  './js/xlsx.js', './js/export.js', './js/share.js', './js/insights.js', './js/weather.js', './js/chart.js', './js/backup.js', './js/cards.js', './js/config.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
 ];
 

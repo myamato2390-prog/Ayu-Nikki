@@ -13,8 +13,13 @@ import { pointStats, similarTrips, personalBests, recordBadges, newRecords } fro
 import { fetchWeather } from './weather.js';
 import { checkBackup, planImport } from './backup.js';
 import { levelScatterSvg } from './chart.js';
+import { SHARE } from './config.js';
+import {
+  packToLink, parseCardText, uploadPack, downloadPack, shortLinkMessage, shareIdIn,
+  makeCardPack, checkCardPack, importCardPack, friendsOf, analysisTrips, ownTrips, isShared, sharedFrom,
+} from './cards.js';
 
-const APP_VERSION = '1.3.5';
+const APP_VERSION = '1.4.0';
 
 const state = {
   trips: [],
@@ -23,7 +28,15 @@ const state = {
   query: emptyQuery(),
   currentId: null,
   onLeave: null,
+  myName: '', // カードをあげるときの名前
+  cardsOn: false, // 「カードのやりとり（試験中）」のスイッチ。入れた人だけ、あげる画面が出る
+  useShared: true, // 分析に仲間のカードを入れる
+  friends: {}, // 仲間ごとの設定 { 名前: { use: false } }
 };
+
+// 自分のカードだけ（自己ベスト・🏆・入力の候補など）／分析に使うカード（仲間のカードを入れるか選べる）
+const mine = () => ownTrips(state.trips);
+const forAnalysis = () => analysisTrips(state.trips, { useShared: state.useShared, friends: state.friends });
 
 // ---------- 小さなヘルパー ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -68,6 +81,103 @@ async function deleteTrips(ids, after) {
       after?.();
     },
   });
+}
+
+// 下から出る小さな画面（カードの送り方を選ぶ など）
+function sheet(html, onClick) {
+  const ov = document.createElement('div');
+  ov.className = 'memo-overlay';
+  ov.innerHTML = `<div class="memo-sheet action-sheet" role="dialog">${html}</div>`;
+  const close = () => ov.remove();
+  ov.addEventListener('click', (e) => {
+    if (e.target === ov || e.target.closest('[data-sheet="close"]')) return close();
+    onClick?.(e, close, ov);
+  });
+  document.body.appendChild(ov);
+  return ov;
+}
+
+// アプリのURL（末尾は /）。カードのリンクの頭に使う
+const appUrl = () => location.origin + location.pathname.replace(/[^/]*$/, '');
+
+// カードをあげる：自分のカードを保管場所に置き、短いリンクを LINE のメッセージで送る
+function sendCardsSheet(list) {
+  const own = list.filter((t) => !isShared(t));
+  if (!own.length) return toast('送れる自分のカードがありません');
+  sheet(`
+    <div class="memo-sheet-head"><span>📇 カードをあげる（${own.length}枚）</span><button type="button" class="memo-close" data-sheet="close" aria-label="閉じる">×</button></div>
+    <div class="memo-sheet-body form">
+      <p class="muted">カードをリンクにして、LINEのメッセージで送ります。受け取った人がリンクを押すと、その人の鮎日記に「あなたのカード」として入ります（写真は送りません）。${SHARE.projectId ? 'リンクは30日間使えます。' : ''}</p>
+      <label class="field"><span class="lbl">あなたの名前（相手のアプリに「◯◯さんのカード」と出ます）</span><input id="send-name" value="${esc(state.myName)}" placeholder="例: たろう" maxlength="20"></label>
+      <label class="check"><input type="checkbox" id="send-memo" checked> メモも入れる</label>
+      <button type="button" class="btn primary wide" data-sheet="send">LINEで送る</button>
+    </div>`, async (e, close, ov) => {
+    if (!e.target.closest('[data-sheet="send"]')) return;
+    const name = $('#send-name', ov).value.trim();
+    if (!name) { toast('名前を入れてください'); $('#send-name', ov).focus(); return; }
+    if (name !== state.myName) { state.myName = name; await db.setKV('myName', name); }
+    const pack = makeCardPack(own, name, { memo: $('#send-memo', ov).checked });
+    close();
+    let msg;
+    if (SHARE.projectId) {
+      // カードを保管場所に置いて、短いリンクにする（30日で消える）
+      toast('リンクを作っています…');
+      try {
+        msg = shortLinkMessage(pack, appUrl(), await uploadPack(pack, SHARE));
+      } catch {
+        return toast(navigator.onLine ? 'リンクを作れませんでした。少し待ってから、もう一度ためしてください' : '電波がないため、リンクを作れません');
+      }
+    } else {
+      msg = await packToLink(pack, appUrl());
+      if (msg.length > 9000) toast('カードが多いので、LINEの1通に入らないかもしれません。年をしぼって送ってください');
+    }
+    if (navigator.share) {
+      try { await navigator.share({ text: msg }); return; } catch (err) { if (err.name === 'AbortError') return; }
+    }
+    // 共有が使えないときは、コピーして貼り付けてもらう
+    try { await navigator.clipboard.writeText(msg); toast('コピーしました。LINEのトークに貼り付けて送ってください'); } catch { toast('送れませんでした。もう一度ためしてください'); }
+  });
+}
+
+// カードのリンク（…#k=… または …#c=…）を押して開かれたとき
+async function viewReceiveLink() {
+  const text = location.hash;
+  history.replaceState(null, '', location.pathname + '#/'); // リンクの印（?openExternalBrowser=1 と #k=…）を消す
+  viewCards();
+  await receiveCards(text, () => route());
+}
+
+// もらったカードを確かめて入れる。text はリンクや貼り付けた文
+async function receiveCards(text, after) {
+  const id = shareIdIn(text);
+  let data;
+  if (id && SHARE.projectId) {
+    // 短いリンク：保管場所からカードを取ってくる
+    toast('カードを取りに行っています…');
+    try { data = await downloadPack(id, SHARE); } catch {
+      return toast(navigator.onLine ? 'カードを取れませんでした。少し待ってから、もう一度リンクを押してください' : '電波がないため、カードを取れません。電波のある所でもう一度リンクを押してください');
+    }
+    if (!data) return toast('このリンクは期限が切れています（30日）。もう一度送ってもらってください');
+  } else {
+    data = await parseCardText(text);
+  }
+  if (!data) return toast('カードを読めませんでした。リンクが途中で切れていないか確かめてください');
+  const why = checkCardPack(data);
+  if (why) return toast(why);
+  const r = importCardPack(data, state.trips);
+  if (!r.add.length && !r.update.length) return toast(`${r.from}さんのカードは、もう全部入っています`);
+  if (!confirm(`${r.from}さんのカード ${r.add.length}枚を入れます。${r.update.length ? `直されたカード ${r.update.length}枚は新しい方に置き換えます。` : ''}自分の記録は変わりません。よろしいですか？`)) return;
+  try {
+    await db.putMany('trips', [...r.add, ...r.update]);
+  } catch {
+    return toast('カードを入れられませんでした。スマホの空き容量を確認してください');
+  }
+  for (const t of [...r.add, ...r.update]) {
+    const i = state.trips.findIndex((x) => x.id === t.id);
+    if (i >= 0) state.trips[i] = t; else state.trips.push(t);
+  }
+  toast(`${r.from}さんのカードを${r.add.length + r.update.length}枚入れました。検索の「だれのカード」で見られます`);
+  after?.();
 }
 
 function getPath(obj, path) {
@@ -130,11 +240,15 @@ function numInput(obj, path, attrs = '') {
 function timeInput(obj, path) {
   return input(obj, path, 'data-time inputmode="numeric" maxlength="5" placeholder="例: 0730"');
 }
+// options は ['晴れ', …] か、値と表示が違うときは [['me', '自分'], …]
 function chips(obj, path, options, multi = false) {
   const v = getPath(obj, path);
   const on = (o) => (multi ? (v || []).includes(o) : v === o);
   return `<div class="chips" data-path="${path}" data-mode="${multi ? 'multi' : 'single'}">${options
-    .map((o) => `<button type="button" class="chip${on(o) ? ' on' : ''}" data-chip="${esc(o)}">${esc(o)}</button>`)
+    .map((o) => {
+      const [val, label] = Array.isArray(o) ? o : [o, o];
+      return `<button type="button" class="chip${on(val) ? ' on' : ''}" data-chip="${esc(val)}">${esc(label)}</button>`;
+    })
     .join('')}</div>`;
 }
 function stepper(obj, path, unit) {
@@ -237,8 +351,8 @@ function cardHtml(t) {
   const photo = t.photos?.[0]?.data;
   const time = t.startTime || t.endTime ? `${esc(t.startTime || '?')}〜${esc(t.endTime || '?')}` : '';
   const weather = formatWeather(t);
-  const ps = pointStats(state.trips, t.river, t.point);
-  const badges = recordBadges(state.trips, t);
+  const ps = pointStats(forAnalysis(), t.river, t.point);
+  const badges = isShared(t) ? [] : recordBadges(mine(), t); // 自己ベストは自分のカードだけで決める
   const level = formatLevel(t);
   const tk = TACKLE_FIELDS.filter(([k]) => t.tackle?.[k]);
 
@@ -249,8 +363,9 @@ function cardHtml(t) {
       ${moves.map((m) => `<div class="card-move">→ ${esc(m)}</div>`).join('')}
       ${t.title ? `<div class="card-title">「${esc(t.title)}」</div>` : ''}
       ${badges.length ? `<div class="card-badges">${badges.map((b) => `<span>🏆 ${b}</span>`).join('')}</div>` : ''}
+      ${isShared(t) ? `<div class="friend-tag">🤝 ${esc(sharedFrom(t))}さんのカード</div>` : ''}
     </header>
-    ${!has(t.count) ? `<a class="after-banner" href="#/edit/${t.id}?tab=after">釣行後の記録がまだです　入力する ›</a>` : ''}
+    ${!has(t.count) && !isShared(t) ? `<a class="after-banner" href="#/edit/${t.id}?tab=after">釣行後の記録がまだです　入力する ›</a>` : ''}
     <section class="catch">
       <div class="catch-count"><b>${has(t.count) ? esc(t.count) : '-'}</b>匹</div>
       <div class="catch-stat"><span>最大</span><b>${has(t.maxSize) ? esc(t.maxSize) : '-'}</b>cm</div>
@@ -315,13 +430,34 @@ function viewCards() {
     else if (act === 'memo') { const t = state.trips.find((x) => x.id === el.dataset.id); if (t) showMemo(t); }
     else if (act === 'photo' && el.src) showPhoto(el.src);
   });
-  $('#edit-btn').onclick = () => { if (state.currentId) location.hash = `#/edit/${state.currentId}`; };
-  $('#share-btn').onclick = async () => {
+  $('#edit-btn').onclick = () => {
     const t = current();
     if (!t) return;
+    if (isShared(t)) return toast('仲間のカードは見るだけです（直すことはできません）');
+    location.hash = `#/edit/${t.id}`;
+  };
+  const shareImage = async (t) => {
     toast('画像を作成中…');
     const r = await shareTrip(t, riverColor(t.river));
     if (r === 'downloaded') toast('画像を保存しました。LINEから送ってください');
+  };
+  // 送り方を選ぶ（お豆日記と同じ）。「カードのやりとり（試験中）」を入れていないときは、今までどおり画像で送る
+  $('#share-btn').onclick = () => {
+    const t = current();
+    if (!t) return;
+    if (!state.cardsOn || isShared(t)) return shareImage(t);
+    sheet(`
+      <div class="memo-sheet-head"><span>このカードを送る</span><button type="button" class="memo-close" data-sheet="close" aria-label="閉じる">×</button></div>
+      <div class="memo-sheet-body">
+        <button type="button" class="btn wide" data-sheet="image">🖼 画像で送る（見るだけ）</button>
+        <button type="button" class="btn primary wide" data-sheet="cards">📇 カードであげる（相手のアプリに入る）</button>
+      </div>`, (e, close) => {
+      const b = e.target.closest('[data-sheet]');
+      if (!b) return;
+      close();
+      if (b.dataset.sheet === 'image') shareImage(t);
+      if (b.dataset.sheet === 'cards') sendCardsSheet([t]);
+    });
   };
 
   const deck = $('#deck');
@@ -359,7 +495,7 @@ function viewCards() {
 
 // ---------- ＋記録：釣行後が未入力の記録があれば続きを選べる ----------
 function viewNew(fresh) {
-  const pending = sortTrips(state.trips.filter((t) => !has(t.count))).reverse().slice(0, 3);
+  const pending = sortTrips(mine().filter((t) => !has(t.count))).reverse().slice(0, 3);
   if (fresh || !pending.length) return viewEdit(null, 'before');
   setActiveTab('new');
   const root = mount(`<div class="top-title"><div>記録</div></div>`);
@@ -391,7 +527,7 @@ async function resizeImage(file, max = 1280, quality = 0.8) {
 }
 
 function latestOtherTrip(id) {
-  return sortTrips(state.trips.filter((t) => t.id !== id && Object.values(t.tackle || {}).some(Boolean))).pop();
+  return sortTrips(mine().filter((t) => t.id !== id && Object.values(t.tackle || {}).some(Boolean))).pop();
 }
 
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -400,12 +536,13 @@ function viewEdit(id, tab = 'before') {
   setActiveTab(id ? '' : 'new');
   const existing = id && state.trips.find((t) => t.id === id);
   if (id && !existing) { location.hash = '#/'; return; }
+  if (existing && isShared(existing)) { toast('仲間のカードは見るだけです（直すことはできません）'); location.hash = '#/'; return; }
   const trip = existing ? clone(existing) : newTrip();
   let isNew = !existing;
   let dirty = false;
   let timer;
   // 自己ベスト更新の判定用：編集前のベストと、この釣行の元の値
-  const bestsBefore = personalBests(state.trips, trip.id);
+  const bestsBefore = personalBests(mine(), trip.id);
   const original = { maxSize: trip.maxSize, count: trip.count };
   const celebrateIfRecord = () => {
     const changed = trip.maxSize !== original.maxSize || trip.count !== original.count;
@@ -456,8 +593,8 @@ function viewEdit(id, tab = 'before') {
   state.onLeave = async () => { if (await save()) celebrateIfRecord(); };
 
   const riverChips = state.rivers.map((r) => r.name);
-  const tackleValues = (k) => [...state.trips.map((t) => t.tackle?.[k]), ...state.presets.map((p) => p.tackle?.[k])];
-  const allPoints = state.trips.flatMap((t) => [t.point, ...(t.moves || []).map((m) => m.point)]);
+  const tackleValues = (k) => [...mine().map((t) => t.tackle?.[k]), ...state.presets.map((p) => p.tackle?.[k])];
+  const allPoints = mine().flatMap((t) => [t.point, ...(t.moves || []).map((m) => m.point)]);
 
   root.innerHTML = `
     <div class="seg" role="tablist">
@@ -543,7 +680,7 @@ function viewEdit(id, tab = 'before') {
     ${datalist('dl-river', riverNames())}
     <datalist id="dl-point"></datalist>
     ${datalist('dl-point-all', allPoints)}
-    ${datalist('dl-station', [...state.rivers.map((r) => r.station), ...state.trips.map((t) => t.station)])}
+    ${datalist('dl-station', [...state.rivers.map((r) => r.station), ...mine().map((t) => t.station)])}
     ${TACKLE_FIELDS.map(([k]) => datalist(`dl-t-${k}`, tackleValues(k))).join('')}
   `;
 
@@ -559,7 +696,7 @@ function viewEdit(id, tab = 'before') {
   };
 
   const refreshRiver = () => {
-    const points = state.trips.filter((t) => t.river === trip.river && t.id !== trip.id).map((t) => t.point);
+    const points = mine().filter((t) => t.river === trip.river && t.id !== trip.id).map((t) => t.point);
     $('#dl-point', root).innerHTML = uniq(points).map((p) => `<option value="${esc(p)}">`).join('');
     const rs = riverSetting(trip.river);
     $('#level-link', root).innerHTML = rs?.url
@@ -569,7 +706,7 @@ function viewEdit(id, tab = 'before') {
   };
 
   const refreshPointStats = () => {
-    const ps = pointStats(state.trips.filter((t) => t.id !== trip.id), trip.river, trip.point);
+    const ps = pointStats(forAnalysis().filter((t) => t.id !== trip.id), trip.river, trip.point);
     $('#point-stats', root).innerHTML = ps
       ? `📍 このポイントの過去 ${ps.trips}回：平均${ps.avg}匹・最多${ps.best}匹${ps.max ? `・最大${ps.max}cm` : ''}`
       : '';
@@ -577,14 +714,14 @@ function viewEdit(id, tab = 'before') {
 
   // 作戦ボード：同じ河川で条件の近い過去の釣行
   const refreshBoard = () => {
-    const list = similarTrips(state.trips, trip, trip.id, 3);
+    const list = similarTrips(forAnalysis(), trip, trip.id, 3);
     $('#board', root).innerHTML = !trip.river
       ? '<p class="muted">河川を選ぶと、似た条件の過去の釣行が出ます。</p>'
       : !list.length
         ? `<p class="muted">${esc(trip.river)}の過去の記録がまだありません。記録がたまるほど役に立ちます。</p>`
         : `<p class="muted">水位・濁り・垢・ポイントなどが近い順です。</p>${list.map(({ trip: t, why }) => `
           <div class="board-item" style="--river:${esc(riverColor(t.river))}">
-            <div class="board-head"><b>${formatDate(t.date)}</b> ${esc(t.point)}<span class="board-count">${esc(t.count)}匹${has(t.maxSize) ? `・${esc(t.maxSize)}cm` : ''}</span></div>
+            <div class="board-head"><b>${formatDate(t.date)}</b> ${esc(t.point)}${isShared(t) ? `<span class="friend-mini">🤝${esc(sharedFrom(t))}</span>` : ''}<span class="board-count">${esc(t.count)}匹${has(t.maxSize) ? `・${esc(t.maxSize)}cm` : ''}</span></div>
             ${t.title ? `<div class="board-title">「${esc(t.title)}」</div>` : ''}
             <div class="board-meta">${esc([formatLevel(t), t.clarity, t.aka ? `垢${t.aka}` : ''].filter(Boolean).join('・'))}</div>
             ${t.methods?.length || t.spots?.length ? `<div class="board-meta">${esc([...(t.methods || []), ...(t.spots || [])].join('・'))}</div>` : ''}
@@ -813,7 +950,8 @@ function viewSearch() {
 
   root.innerHTML = `
     <form class="form" autocomplete="off" onsubmit="return false">
-      ${field('キーワード', input(q, 'text', 'type="search" placeholder="ポイント・仕掛け・釣り方・メモなど（空白でAND）"'))}
+      ${friendsOf(state.trips).length ? group('だれのカード', chips(q, 'who', [['me', '自分'], ['friends', '仲間'], ['all', '全部']])) : ''}
+      ${field('キーワード', input(q, 'text', 'type="search" placeholder="ポイント・仕掛け・釣り方・メモ・仲間の名前など（空白でAND）"'))}
       ${group('河川', chips(q, 'river', riverNames()))}
       <div class="row2">
         ${field('シーズン', `<select data-path="season"><option value="">すべて</option>${seasonOpts.map((y) => `<option value="${y}" ${String(q.season) === String(y) ? 'selected' : ''}>${y}年</option>`).join('')}</select>`)}
@@ -839,12 +977,19 @@ function viewSearch() {
     $('#results', root).innerHTML = list.slice(0, 100).map((t) => `
       <li><button type="button" data-open="${t.id}" style="--river:${esc(riverColor(t.river))}">
         <span class="r-date">${formatDate(t.date)}</span>
-        <span class="r-main">${esc(t.river)} ${esc(t.title || t.point)}</span>
+        <span class="r-main">${isShared(t) ? `<span class="friend-mini">🤝${esc(sharedFrom(t))}</span>` : ''}${esc(t.river)} ${esc(t.title || t.point)}</span>
         <span class="r-num">${has(t.count) ? esc(t.count) + '匹' : '-'}${has(t.maxSize) ? ` / ${esc(t.maxSize)}cm` : ''}</span>
       </button></li>`).join('') || '<li class="muted">該当なし</li>';
   };
 
-  bindControls(root, q, refresh);
+  // 「だれのカード」は空にしない（もう一度押したら「自分」に戻す）
+  bindControls(root, q, (path) => {
+    if (path === 'who' && !q.who) {
+      q.who = 'me';
+      $$('.chips[data-path="who"] .chip', root).forEach((c) => c.classList.toggle('on', c.dataset.chip === 'me'));
+    }
+    refresh();
+  });
   root.addEventListener('change', (e) => {
     if (e.target.matches('select[data-path]')) { setPath(q, e.target.dataset.path, e.target.value); refresh(); }
   });
@@ -868,8 +1013,11 @@ function viewSeason(season) {
   setActiveTab('season');
   const years = seasons(state.trips);
   const year = Number(season) || years[0] || new Date().getFullYear();
-  const trips = state.trips.filter((t) => seasonOf(t) === year);
+  const trips = forAnalysis().filter((t) => seasonOf(t) === year);
   const s = summarize(trips);
+  const friends = friendsOf(state.trips);
+  const sharedIn = trips.filter(isShared).length;
+  const who = (t) => (isShared(t) ? `（🤝${esc(sharedFrom(t))}さん）` : '');
 
   const root = mount(`<div class="top-title"><div>シーズンまとめ</div></div>
     <select id="season-select" class="top-select" aria-label="シーズン">
@@ -880,7 +1028,12 @@ function viewSeason(season) {
     ? `<div class="table-wrap"><table><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c ?? '-'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
     : '<p class="muted">データなし</p>';
 
-  root.innerHTML = trips.length ? `
+  // 仲間のカードを入れるかの切り替え（もらったカードがあるときだけ出す）
+  const sharedBox = friends.length ? `<div class="shared-box">
+      <button type="button" class="chip${state.useShared ? ' on' : ''}" id="use-shared">🤝 仲間のカードも入れる</button>
+      <span class="muted">${state.useShared ? `${year}年：仲間のカード${sharedIn}枚を含む` : '自分のカードだけで集計しています'}</span>
+    </div>` : '';
+  root.innerHTML = sharedBox + (trips.length ? `
     <div class="tiles">
       <div class="tile"><span>釣行回数</span><b>${s.tripCount}</b>回</div>
       <div class="tile"><span>総匹数</span><b>${s.totalCount}</b>匹</div>
@@ -889,8 +1042,8 @@ function viewSeason(season) {
       <div class="tile"><span>最多釣果</span><b>${s.bestTrip ? esc(s.bestTrip.count) : '-'}</b>匹</div>
       <div class="tile"><span>総バラシ</span><b>${s.totalBare}</b>回</div>
     </div>
-    ${s.maxTrip ? `<p class="note">最大：${formatDate(s.maxTrip.date)} ${esc(s.maxTrip.river)} ${esc(s.maxTrip.point)}</p>` : ''}
-    ${s.bestTrip ? `<p class="note">最多：${formatDate(s.bestTrip.date)} ${esc(s.bestTrip.river)} ${esc(s.bestTrip.point)}</p>` : ''}
+    ${s.maxTrip ? `<p class="note">最大：${formatDate(s.maxTrip.date)} ${esc(s.maxTrip.river)} ${esc(s.maxTrip.point)}${who(s.maxTrip)}</p>` : ''}
+    ${s.bestTrip ? `<p class="note">最多：${formatDate(s.bestTrip.date)} ${esc(s.bestTrip.river)} ${esc(s.bestTrip.point)}${who(s.bestTrip)}</p>` : ''}
 
     <h3>河川別</h3>
     ${table(['河川', '回数', '匹数', '平均', '最大'], s.byRiver.map((r) => [esc(r.river), r.trips, r.count, r.avg, r.max]))}
@@ -904,9 +1057,14 @@ function viewSeason(season) {
 
     <button type="button" class="btn line wide" id="season-image">🖼 まとめ画像をLINEで送る</button>
     <button type="button" class="btn primary wide" id="export">📊 ${year}シーズンをExcelで出力</button>
-  ` : `<div class="empty"><p>${year}年の釣行はまだありません。</p></div>`;
+  ` : `<div class="empty"><p>${year}年の釣行はまだありません。</p></div>`);
 
   $('#season-select').addEventListener('change', (e) => { location.hash = `#/season/${e.target.value}`; });
+  $('#use-shared', root)?.addEventListener('click', async () => {
+    state.useShared = !state.useShared;
+    await db.setKV('useShared', state.useShared);
+    viewSeason(year);
+  });
   if ($('#lv-chart', root)) levelChart($('#lv-chart', root), year);
   $('#season-image', root)?.addEventListener('click', async () => {
     toast('画像を作成中…');
@@ -923,7 +1081,7 @@ function viewSeason(season) {
 
 // 水位×釣果のグラフ（観測所ごと）
 function levelChart(box, year) {
-  const withLevel = state.trips.filter((t) => has(t.levelCm) && has(t.count));
+  const withLevel = forAnalysis().filter((t) => has(t.levelCm) && has(t.count));
   // 河川と観測所の組み合わせ。区切りは「|」（画面の属性に入れても壊れない文字）
   const keyOf = (t) => `${t.river}|${t.station || ''}`;
   const keys = uniq(withLevel.map(keyOf));
@@ -945,7 +1103,7 @@ function levelChart(box, year) {
       const past = seasonOf(t) !== year;
       return {
         id: t.id, count: Number(t.count), level: Number(t.levelCm), past,
-        label: `${past ? `${String(y).slice(2)}/` : ''}${m}/${d}`,
+        label: `${past ? `${String(y).slice(2)}/` : ''}${m}/${d}${isShared(t) ? ` 🤝${sharedFrom(t)}` : ''}`,
       };
     });
     const width = Math.max(300, Math.min(600, box.clientWidth || 360));
@@ -961,7 +1119,7 @@ function levelChart(box, year) {
       ${chart ? `<div class="chart" style="--river:${esc(color)}">${chart.svg}</div>` : `<p class="muted">${year}年はこの観測所の水位（数値）が入った釣行がありません。「過去のシーズンも表示」で過去の記録を見られます。</p>`}
       ${chart?.hidden ? `<p class="muted">重なるため${chart.hidden}件の日付を省きました。点をタップすると見られます。</p>` : ''}
       ${sel.length ? sel.map((t) => `<div class="chart-sel" style="--river:${esc(color)}">
-        <div><b>${formatDate(t.date)}</b> ${esc(t.point)}</div>
+        <div><b>${formatDate(t.date)}</b> ${esc(t.point)}${isShared(t) ? `<span class="friend-mini">🤝${esc(sharedFrom(t))}さん</span>` : ''}</div>
         <div>${esc(t.count)}匹${has(t.maxSize) ? `・最大${esc(t.maxSize)}cm` : ''}・水位${esc(formatLevel(t))}</div>
         <button type="button" class="btn small" data-open-card="${t.id}">カードを見る ›</button></div>`).join('') : '<p class="muted">点をタップすると、その日の内容が出ます。</p>'}`;
   };
@@ -977,7 +1135,13 @@ function levelChart(box, year) {
       ui.sel = near.map((g) => g.dataset.pt);
       render();
     }
-    else if (open) { state.query = emptyQuery(); state.currentId = open.dataset.openCard; location.hash = '#/'; }
+    else if (open) {
+      // 仲間のカードなら「自分と仲間」で開く（カード画面はふだん自分のカードだけ）
+      const t = state.trips.find((x) => x.id === open.dataset.openCard);
+      state.query = { ...emptyQuery(), who: isShared(t) ? 'all' : 'me' };
+      state.currentId = open.dataset.openCard;
+      location.hash = '#/';
+    }
   });
   box.addEventListener('change', (e) => {
     const opt = e.target.dataset.opt;
@@ -1023,6 +1187,19 @@ function viewSettings() {
         <button type="button" class="btn small danger" data-act="del-preset" data-id="${p.id}">削除</button></li>`).join('')}</ul>`
         : '<p class="muted">入力画面の「仕掛け」欄にある「プリセットに保存」から登録できます。</p>'}
 
+      <h3>仲間とカードのやりとり</h3>
+      <label class="check"><input type="checkbox" id="cards-on" ${state.cardsOn ? 'checked' : ''}> カードのやりとり（試験中）を使う</label>
+      <p class="muted">自分のカードを LINE で仲間に送ったり、仲間からもらったカードを見たりできます。いまは試験中なので、使う人だけスイッチを入れてください。もらったカードのリンクは、スイッチを入れていなくても読み込めます。</p>
+      ${state.cardsOn ? `<div class="send-box">
+        ${field('あなたの名前（カードをあげると、相手のアプリに「◯◯さんのカード」と出ます）', `<input id="my-name" value="${esc(state.myName)}" placeholder="例: たろう" maxlength="20">`)}
+        <p class="muted name-hint" ${state.myName ? 'hidden' : ''}>まだ名前が入っていません。カードをあげる前に入れてください。</p>
+        ${field('あげるカードの年', `<select id="send-year"><option value="">すべて</option>${seasons(mine()).map((y) => `<option value="${y}">${y}年</option>`).join('')}</select>`)}
+        <div class="tools"><button type="button" class="btn primary" data-act="send-cards">📇 カードをあげる</button></div>
+        <p class="muted">1枚だけあげるときは、カード画面の ⤴ から「カードであげる」を選びます。もらうときは、LINEに届いたリンクを押すだけです。うまく開かないときは、メッセージを長押しして「コピー」してから下のボタンを押してください。</p>
+        <div class="tools"><button type="button" class="btn" data-act="paste-cards">📋 貼り付けて読み込む</button></div>
+      </div>` : ''}
+      <div id="friend-list"></div>
+
       <h3>記録を1件ずつ消す</h3>
       <details class="del-box" id="del-box">
         <summary>試しに入れた記録などを消すときに開きます（${state.trips.length}件）</summary>
@@ -1041,7 +1218,23 @@ function viewSettings() {
       <h3>このアプリについて</h3>
       <p class="muted">鮎日記 v${APP_VERSION}${db.IS_TEST ? '（テスト版：本番とは別の保存場所です）' : ''}<br>Androidでは Chrome のメニューから「ホーム画面に追加」（または「アプリをインストール」）すると、アプリとして使えます。電波のない河原でも動きます（音声入力と天気の自動入力だけは電波が必要です）。天気は Open-Meteo の予報データを使っています。</p>
     `;
+    renderFriends();
     renderDelList();
+  };
+
+  // 仲間ごとの一覧：分析に入れるか、まとめて消す（もらったカードがあるときだけ）
+  const renderFriends = () => {
+    const box = $('#friend-list', root);
+    if (!box) return;
+    const fs = friendsOf(state.trips);
+    box.innerHTML = fs.length ? `<p class="muted">もらったカード（まとめ・Excel・グラフ・作戦ボード・ポイント成績に入れるかを選べます。自己ベストは自分のカードだけで決めます）</p>
+      <ul class="del-list">${fs.map((f) => {
+        const use = state.friends[f.name]?.use !== false;
+        return `<li data-friend="${esc(f.name)}">
+          <span class="del-main friend-main"><b>🤝 ${esc(f.name)}さん</b><span class="muted">カード ${f.count}枚</span></span>
+          <span class="del-acts"><button type="button" class="chip${use ? ' on' : ''}" data-act="friend-use">${use ? '分析に入れる' : '分析に入れない'}</button><button type="button" class="btn small" data-act="friend-del">消す…</button></span>
+        </li>`;
+      }).join('')}</ul>${state.useShared ? '' : '<p class="muted">いまは「まとめ」で仲間のカードを入れない設定になっています。</p>'}` : '';
   };
 
   // 「記録を1件ずつ消す」の一覧（新しい順）
@@ -1052,7 +1245,7 @@ function viewSettings() {
     ul.innerHTML = list.map((t) => `
       <li data-del-id="${t.id}">
         <span class="del-main"><span class="r-date">${formatDate(t.date)} ${esc(t.startTime)}</span>
-          <span>${esc(t.river || '河川未入力')} ${esc(t.point)} ${has(t.count) ? `${esc(t.count)}匹` : '（釣行後まだ）'}${t.title ? `「${esc(t.title)}」` : ''}</span></span>
+          <span>${isShared(t) ? `<span class="friend-mini">🤝${esc(sharedFrom(t))}</span>` : ''}${esc(t.river || '河川未入力')} ${esc(t.point)} ${has(t.count) ? `${esc(t.count)}匹` : '（釣行後まだ）'}${t.title ? `「${esc(t.title)}」` : ''}</span></span>
         <span class="del-acts"><button type="button" class="btn small" data-act="del-ask">消す…</button></span>
       </li>`).join('') || '<li class="muted">記録はありません</li>';
     $('#del-box summary', root).textContent = `試しに入れた記録などを消すときに開きます（${state.trips.length}件）`;
@@ -1062,7 +1255,14 @@ function viewSettings() {
 
   const saveRivers = async () => { await db.setKV('rivers', state.rivers); };
 
-  root.addEventListener('input', (e) => {
+  root.addEventListener('input', async (e) => {
+    if (e.target.id === 'my-name') {
+      state.myName = e.target.value.trim();
+      await db.setKV('myName', state.myName);
+      const hint = $('.name-hint', root);
+      if (hint) hint.hidden = !!state.myName;
+      return;
+    }
     const el = e.target.closest('[data-rf]');
     if (!el) return;
     const item = el.closest('.river-item');
@@ -1072,7 +1272,14 @@ function viewSettings() {
     if (el.dataset.rf === 'color') item.style.setProperty('--river', el.value);
     saveRivers();
   });
-  root.addEventListener('change', (e) => { if (e.target.closest('[data-rf="url"]')) render(); });
+  root.addEventListener('change', async (e) => {
+    if (e.target.closest('[data-rf="url"]')) render();
+    if (e.target.id === 'cards-on') {
+      state.cardsOn = e.target.checked;
+      await db.setKV('cardsOn', state.cardsOn);
+      render();
+    }
+  });
 
   root.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-act]');
@@ -1087,6 +1294,55 @@ function viewSettings() {
       return;
     }
     if (act === 'del-no') { renderDelList(); return; }
+    if (act === 'send-cards') {
+      const y = $('#send-year', root).value;
+      return sendCardsSheet(mine().filter((t) => !y || String(seasonOf(t)) === y));
+    }
+    if (act === 'paste-cards') {
+      // まずクリップボードから読む。だめなら貼り付ける欄を出す
+      const after = () => { if (root.isConnected) render(); };
+      let text = '';
+      try { text = await navigator.clipboard.readText(); } catch { /* 許可がない */ }
+      if (text && (shareIdIn(text) || (await parseCardText(text)))) return receiveCards(text, after);
+      sheet(`
+        <div class="memo-sheet-head"><span>📋 貼り付けて読み込む</span><button type="button" class="memo-close" data-sheet="close" aria-label="閉じる">×</button></div>
+        <div class="memo-sheet-body form">
+          <p class="muted">LINEのメッセージを長押しして「コピー」し、下の欄を長押しして「貼り付け」してください。</p>
+          <textarea id="paste-box" rows="6" placeholder="ここに貼り付け"></textarea>
+          <button type="button" class="btn primary wide" data-sheet="paste-go">読み込む</button>
+        </div>`, async (ev, close, ov) => {
+        if (!ev.target.closest('[data-sheet="paste-go"]')) return;
+        const t = $('#paste-box', ov).value;
+        if (!t.trim()) return toast('貼り付けてから押してください');
+        close();
+        await receiveCards(t, after);
+      });
+      return;
+    }
+    const fli = btn?.closest('[data-friend]');
+    if (act === 'friend-use') {
+      const name = fli.dataset.friend;
+      const use = state.friends[name]?.use !== false;
+      state.friends = { ...state.friends, [name]: { ...(state.friends[name] || {}), use: !use } };
+      await db.setKV('friends', state.friends);
+      renderFriends();
+      return;
+    }
+    if (act === 'friend-del') {
+      fli.classList.add('asking');
+      fli.querySelector('.del-acts').innerHTML = '<button type="button" class="btn small danger-fill" data-act="friend-del-yes">全部消す</button><button type="button" class="btn small" data-act="friend-del-no">やめる</button>';
+      clearTimeout(fli._t);
+      fli._t = setTimeout(() => { if (fli.isConnected) renderFriends(); }, 5000);
+      return;
+    }
+    if (act === 'friend-del-no') { renderFriends(); return; }
+    if (act === 'friend-del-yes') {
+      const name = fli.dataset.friend;
+      const after = () => { if (root.isConnected) { renderFriends(); renderDelList(); } };
+      await deleteTrips(state.trips.filter((t) => sharedFrom(t) === name).map((t) => t.id), after);
+      after();
+      return;
+    }
     if (act === 'del-yes') {
       await deleteTrips([li.dataset.delId], () => { if (root.isConnected) { renderDelList(); $('#del-box', root).open = true; } });
       renderDelList();
@@ -1174,6 +1430,8 @@ async function route() {
     state.onLeave = null;
     await fn();
   }
+  // 仲間から届いたカードのリンク（…#k=番号 または …#c=カード）
+  if (/^#[ck]=/.test(location.hash)) return viewReceiveLink();
   const [path, qs] = location.hash.replace(/^#/, '').split('?');
   const parts = path.split('/').filter(Boolean);
   const params = new URLSearchParams(qs || '');
@@ -1193,6 +1451,10 @@ async function load() {
   const rivers = await db.getKV('rivers', clone(DEFAULT_RIVER_SETTINGS));
   // 以前に保存した設定には色がないので補う
   state.rivers = rivers.map((r) => ({ ...defaultRiverPos(r.name), ...r, color: r.color || defaultRiverColor(r.name) }));
+  state.myName = await db.getKV('myName', '');
+  state.cardsOn = await db.getKV('cardsOn', false);
+  state.useShared = await db.getKV('useShared', true);
+  state.friends = await db.getKV('friends', {});
 }
 
 async function start() {

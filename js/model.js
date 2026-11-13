@@ -59,10 +59,15 @@ export function composeTenjo(tk) {
   return [tk.tenjoMat, gou].filter(Boolean).join(' ');
 }
 
+// アプリの名前（バックアップ・カードの印）と釣りの種類（将来お豆日記と1つにまとめるときの印）
+export const APP_ID = 'ayu-nikki';
+export const KIND = 'ayu';
+
 export function newTrip(date = todayISO()) {
   const now = new Date().toISOString();
   return {
     id: uid(),
+    kind: KIND,
     date,
     river: '', point: '', startTime: '', endTime: '',
     weather: '', tempMorning: null, tempMax: null, waterTemp: null,
@@ -86,6 +91,8 @@ export function normalizeTrip(t) {
   const out = {
     ...base, ...t,
     id: t.id || base.id,
+    kind: KIND, // kind がない古い記録も鮎
+
     tackle: { ...base.tackle, ...(t.tackle || {}) },
     otori: { ...base.otori, ...(t.otori || {}) },
     ticket: { ...base.ticket, ...(t.ticket || {}) },

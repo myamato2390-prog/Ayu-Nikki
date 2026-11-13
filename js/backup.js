@@ -1,8 +1,8 @@
 // バックアップの読み込み（DOMに依存しない）
 // 読み込みは「足すだけ」。今ある記録は消さず、同じ記録は updatedAt が新しい方を残す
-import { normalizeTrip } from './model.js';
+import { normalizeTrip, APP_ID } from './model.js';
 
-export const APP_ID = 'ayu-nikki';
+export { APP_ID };
 
 // 読み込めるファイルか確かめる。だめなときは、やさしい言葉の理由を返す
 export function checkBackup(data) {
