@@ -163,6 +163,8 @@ body.is-test .deck.with-banner { height: calc(100dvh - var(--top-h) - var(--nav-
 .grid.tackle { grid-template-columns: repeat(3, 1fr); }
 .cell { padding: 3px 8px; min-width: 0; word-break: break-word; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .cell.wide { grid-column: 1 / -1; }
+/* 日の出／入り：「5:06／19:20」を1行に収める */
+.cell.sun { white-space: nowrap; font-size: 12.5px; padding-left: 6px; padding-right: 4px; letter-spacing: -.02em; }
 .cell span { display: block; font-size: 11px; color: var(--sub); }
 .grid.tackle { background: color-mix(in srgb, var(--river) 5%, #fff) !important; }
 .mini-link { text-decoration: none; font-weight: 700; padding: 0 4px; }
@@ -181,6 +183,15 @@ body.is-test .deck.with-banner { height: calc(100dvh - var(--top-h) - var(--nav-
 .memo-sheet-body { padding: 14px 16px 24px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 16px; line-height: 1.7; -webkit-overflow-scrolling: touch; }
 .strip { display: flex; gap: 6px; padding: 6px 14px; overflow-x: auto; border-top: 1px solid var(--line); }
 .strip img { width: 66px; height: 66px; object-fit: cover; border-radius: 8px; background: var(--line); flex: none; cursor: zoom-in; }
+/* 1画面に収まらないカード（項目が多い日・小さいスマホ）は、自動で詰める（app.js の fitCard） */
+.card.tight .memo-text { -webkit-line-clamp: 2; max-height: calc(1.45em * 2); }
+.card.tight .strip { padding: 4px 14px; }
+.card.tight .strip img { width: 48px; height: 48px; }
+.card.tight .cell { padding-top: 2px; padding-bottom: 2px; }
+.card.tighter .memo-text { -webkit-line-clamp: 1; max-height: 1.45em; }
+.card.tighter .strip img { width: 36px; height: 36px; border-radius: 6px; }
+.card.tighter .catch-count b { font-size: 40px; }
+.card.tighter .pills { padding-bottom: 3px; }
 .card > :last-child { border-radius: 0 0 14px 14px; }
 .photo-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.92); display: grid; place-items: center; }
 .photo-overlay img { max-width: 100vw; max-height: 100dvh; }
@@ -329,3 +340,7 @@ th { background: var(--main-soft); color: var(--main); font-size: 13px; }
 .shared-box .chip { min-height: 36px; }
 .friend-main span { white-space: normal !important; }
 .friend-main b { white-space: nowrap; }
+
+/* 日の出・日の入り（入力画面） */
+.sun-line { margin: 0 0 6px; font-size: 14px; }
+.sun-line b { font-size: 16px; margin-right: 2px; }

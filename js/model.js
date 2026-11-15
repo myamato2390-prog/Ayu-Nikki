@@ -71,6 +71,7 @@ export function newTrip(date = todayISO()) {
     date,
     river: '', point: '', startTime: '', endTime: '',
     weather: '', tempMorning: null, tempMax: null, waterTemp: null,
+    sunrise: '', sunset: '', // 日の出・日の入り（河川の位置と日付から自動で計算）
     levelWord: '', levelCm: null, station: '',
     clarity: '', aka: '',
     tackle: emptyTackle(),
@@ -136,6 +137,12 @@ export function formatDate(iso) {
 export const seasonOf = (t) => Number((t.date || '').slice(0, 4)) || null;
 
 // 「晴れ 朝18℃／最高31℃」
+// 「5:06／19:20」（先頭の0は取る）
+export function formatSun(t) {
+  const hm = (s) => String(s || '').replace(/^0(\d):/, '$1:');
+  return t.sunrise || t.sunset ? `${hm(t.sunrise) || '?'}／${hm(t.sunset) || '?'}` : '';
+}
+
 export function formatWeather(t) {
   const temps = [has(t.tempMorning) ? `朝${t.tempMorning}℃` : '', has(t.tempMax) ? `最高${t.tempMax}℃` : ''].filter(Boolean).join('／');
   return [t.weather, temps].filter(Boolean).join(' ');

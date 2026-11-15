@@ -2,7 +2,7 @@ import * as db from './db.js';
 import {
   DEFAULT_RIVER_SETTINGS, THEME_COLOR, defaultRiverColor, defaultRiverPos, LINE_MATERIALS, composeTenjo,
   WEATHER, LEVEL_WORDS, CLARITY, AKA, SIZE_FEEL, JIAI, SPOTS, METHODS, TACKLE_FIELDS,
-  newTrip, normalizeTrip, sortTrips, formatDate, formatLevel, formatWeather, formatMoves, normalizeTime, tackleSummary,
+  newTrip, normalizeTrip, sortTrips, formatDate, formatLevel, formatWeather, formatSun, formatMoves, normalizeTime, tackleSummary,
   has, num, uid, todayISO, seasonOf,
 } from './model.js';
 import { emptyQuery, isEmptyQuery, filterTrips, describeQuery } from './search.js';
@@ -11,6 +11,7 @@ import { seasonXlsx } from './export.js';
 import { shareTrip, downloadBlob, renderSeasonImage, shareBlob } from './share.js';
 import { pointStats, similarTrips, personalBests, recordBadges, newRecords } from './insights.js';
 import { fetchWeather } from './weather.js';
+import { sunTimes } from './sun.js';
 import { checkBackup, planImport } from './backup.js';
 import { levelScatterSvg } from './chart.js';
 import { SHARE } from './config.js';
@@ -19,7 +20,7 @@ import {
   makeCardPack, checkCardPack, importCardPack, friendsOf, analysisTrips, ownTrips, isShared, sharedFrom,
 } from './cards.js';
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 
 const state = {
   trips: [],
@@ -196,6 +197,14 @@ function readValue(el) {
 function riverSetting(name) {
   return state.rivers.find((r) => r.name === name);
 }
+// 日の出・日の入り。記録にあればそれを、なければ河川の位置と日付から計算する（古い記録・仲間のカード用）
+function sunOf(t) {
+  if (t.sunrise || t.sunset) return { sunrise: t.sunrise, sunset: t.sunset };
+  const rs = riverSetting(t.river);
+  const pos = rs && has(rs.lat) && has(rs.lon) ? rs : defaultRiverPos(t.river);
+  return sunTimes(t.date, pos.lat, pos.lon);
+}
+
 function riverColor(name) {
   return riverSetting(name)?.color || (name ? defaultRiverColor(name) : THEME_COLOR);
 }
@@ -380,6 +389,7 @@ function cardHtml(t) {
     <section class="grid">
       ${cell('天気・気温', esc(weather), weather.length > 9)}
       ${cell('水温', has(t.waterTemp) ? `${esc(t.waterTemp)}℃` : '')}
+      ${formatSun(sunOf(t)) ? `<div class="cell sun"><span>日の出／入り</span>${esc(formatSun(sunOf(t)))}</div>` : ''}
       ${cell('濁り', esc(t.clarity))}
       ${cell('垢', esc(t.aka))}
       ${cell('水位', level ? esc(level) + (rs?.url ? ` <a href="${esc(rs.url)}" target="_blank" rel="noopener" class="mini-link">↗</a>` : '') : '', true)}
@@ -388,6 +398,20 @@ function cardHtml(t) {
     ${t.memo ? `<section class="memo" data-act="memo" data-id="${t.id}"><div class="memo-text">${esc(t.memo)}</div><div class="memo-more" hidden>▼ 続きを読む</div></section>` : ''}
     ${t.photos?.length > 1 || (t.photos?.length === 1) ? `<section class="strip">${t.photos.map((p) => `<img data-src="${p.data}" alt="写真" data-act="photo">`).join('')}</section>` : ''}
   </article>`;
+}
+
+// カードを1画面に収める。はみ出すときは、メモを短くし、写真を小さくする（2段階）
+function fitCard(card) {
+  const showMore = () => {
+    // メモが収まらないときだけ「続きを読む」を出す
+    const mt = $('.memo-text', card);
+    if (mt) $('.memo-more', card).hidden = mt.scrollHeight <= mt.clientHeight + 2;
+  };
+  const over = () => card.scrollHeight > card.clientHeight + 1;
+  card.classList.remove('tight', 'tighter');
+  showMore();
+  if (over()) { card.classList.add('tight'); showMore(); }
+  if (over()) { card.classList.add('tighter'); showMore(); }
 }
 
 function viewCards() {
@@ -437,7 +461,7 @@ function viewCards() {
   };
   const shareImage = async (t) => {
     toast('画像を作成中…');
-    const r = await shareTrip(t, riverColor(t.river));
+    const r = await shareTrip({ ...t, ...sunOf(t) }, riverColor(t.river));
     if (r === 'downloaded') toast('画像を保存しました。LINEから送ってください');
   };
   // 送り方を選ぶ（お豆日記と同じ）：画像で送る／カードであげる
@@ -474,9 +498,7 @@ function viewCards() {
       $$('img[data-src]', card).forEach((img) => { img.src = img.dataset.src; img.removeAttribute('data-src'); });
       const head = $('.card-head[data-bg]', card);
       if (head) { head.style.backgroundImage = `linear-gradient(rgba(0,0,0,.25),rgba(0,0,0,.55)),url("${head.dataset.bg}")`; head.removeAttribute('data-bg'); }
-      // 3行に収まらないときだけ「続きを読む」を出す
-      const mt = $('.memo-text', card);
-      if (mt) $('.memo-more', card).hidden = mt.scrollHeight <= mt.clientHeight + 2;
+      fitCard(card);
     });
   };
   $$('[data-nav]').forEach((b) => {
@@ -613,6 +635,7 @@ function viewEdit(id, tab = 'before') {
 
       <h3>状況</h3>
       <div class="tools"><button type="button" class="btn small" data-act="weather">☀ 天気・気温を自動入力</button><span class="muted" id="weather-note"></span></div>
+      <p class="sun-line" id="sun-line"></p>
       ${group('天気', chips(trip, 'weather', WEATHER))}
       <div class="row3">
         ${field('朝の気温', `<div class="with-unit">${numInput(trip, 'tempMorning', 'step="0.1"')}<span>℃</span></div>`)}
@@ -704,6 +727,16 @@ function viewEdit(id, tab = 'before') {
     setTheme(riverColor(trip.river));
   };
 
+  // 日の出・日の入り：河川の位置と日付から計算して入れる（電波はいらない）
+  const refreshSun = () => {
+    const s = sunOf({ ...trip, sunrise: '', sunset: '' });
+    if (s.sunrise || s.sunset) { trip.sunrise = s.sunrise; trip.sunset = s.sunset; }
+    const box = $('#sun-line', root);
+    box.innerHTML = trip.sunrise || trip.sunset
+      ? `🌅 日の出 <b>${esc(formatSun({ sunrise: trip.sunrise, sunset: '' }).split('／')[0])}</b>　🌇 日の入り <b>${esc(formatSun({ sunrise: '', sunset: trip.sunset }).split('／')[1])}</b><span class="muted">（${esc(trip.river || '')}付近の計算値）</span>`
+      : '<span class="muted">河川を選ぶと、日の出・日の入りの時刻が自動で入ります。</span>';
+  };
+
   const refreshPointStats = () => {
     const ps = pointStats(forAnalysis().filter((t) => t.id !== trip.id), trip.river, trip.point);
     $('#point-stats', root).innerHTML = ps
@@ -783,11 +816,13 @@ function viewEdit(id, tab = 'before') {
       prevRiver = trip.river;
       refreshInputs();
       refreshRiver();
+      refreshSun();
       // 天気が空欄なら自動で入れる
       if (!trip.weather && !has(trip.tempMorning) && !has(trip.tempMax) && navigator.onLine) fillWeather(true);
     }
     // 天井糸は素材と号数から表示用の文字を作る
     if (path === 'tackle.tenjoMat' || path === 'tackle.tenjoGou') trip.tackle.tenjo = composeTenjo(trip.tackle);
+    if (path === 'date') refreshSun();
     if (['river', 'point', 'levelWord', 'levelCm', 'station', 'clarity', 'aka', 'date'].includes(path)) {
       refreshPointStats();
       refreshBoard();
@@ -919,6 +954,7 @@ function viewEdit(id, tab = 'before') {
   });
 
   refreshRiver();
+  refreshSun();
   refreshPointStats();
   refreshBoard();
   renderMoves();
@@ -1072,7 +1108,7 @@ function viewSeason(season) {
     if (r === 'downloaded') toast('画像を保存しました。LINEから送ってください');
   });
   $('#export', root)?.addEventListener('click', () => {
-    const bytes = seasonXlsx(trips, year);
+    const bytes = seasonXlsx(trips.map((t) => ({ ...t, ...sunOf(t) })), year);
     downloadBlob(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `鮎日記_${year}シーズン.xlsx`);
     toast('Excelファイルを保存しました');
   });

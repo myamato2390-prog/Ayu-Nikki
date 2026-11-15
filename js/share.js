@@ -1,5 +1,5 @@
 // カードを画像（PNG）にしてLINEなどへ共有する
-import { formatDate, formatLevel, formatWeather, has, TACKLE_FIELDS, formatMoves, THEME_COLOR } from './model.js';
+import { formatDate, formatLevel, formatWeather, formatSun, has, TACKLE_FIELDS, formatMoves, THEME_COLOR } from './model.js';
 
 const W = 1080, PAD = 56;
 const C = { bg: '#f4f7f5', card: '#ffffff', main: '#0f5f57', sub: '#5b6b66', text: '#1d2a27', accent: '#e3b400', line: '#dfe7e4' };
@@ -73,6 +73,7 @@ function draw(ctx, t, photo, measureOnly, color) {
 
   section('状況');
   row('天気', [formatWeather(t), has(t.waterTemp) ? `水温${t.waterTemp}℃` : ''].filter(Boolean).join('　'));
+  row('日の出／入り', formatSun(t));
   row('水位', formatLevel(t));
   row('濁り・垢', [t.clarity, t.aka ? `垢：${t.aka}` : ''].filter(Boolean).join('　'));
 
